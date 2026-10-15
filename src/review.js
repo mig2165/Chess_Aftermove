@@ -51,6 +51,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     moveSoundsEnabled = changes.moveSounds.newValue !== false;
     $("#move-sounds").checked = moveSoundsEnabled;
   }
+  if (changes.aiEnabled || changes.aiKey || changes.aiModel) updateCoachSettingsStatus().catch(() => {});
   if (!changes.recording) return;
   gameLocked = Boolean(changes.recording.newValue);
   if (gameLocked) {
@@ -204,7 +205,6 @@ function uciLineToSan(fen, moves, limit = 5) {
     } catch {
       break;
     }
-    if (changes.aiEnabled || changes.aiKey || changes.aiModel) updateCoachSettingsStatus().catch(() => {});
   }
   return line;
 }
