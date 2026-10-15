@@ -74,6 +74,18 @@
             <section id="selected-move-panel" class="selected-move-panel" aria-live="polite">
               <p class="move-panel-placeholder">Analyze the completed game to see move ratings and engine alternatives.</p>
             </section>
+            <section id="what-if-panel" class="what-if-panel" aria-live="polite" hidden>
+              <div class="what-if-heading">
+                <h3>Freeplay analysis</h3>
+                <span id="what-if-evaluation">Preparing position…</span>
+              </div>
+              <p id="what-if-status">Click one of your pieces, then a highlighted square. Stockfish will rate every alternate move.</p>
+              <p id="what-if-line" class="what-if-line"></p>
+              <div class="what-if-actions">
+                <button id="what-if-undo" type="button">Undo alternate move</button>
+                <button id="what-if-exit" type="button">Exit freeplay</button>
+              </div>
+            </section>
             <div class="replay-options">
               <span class="keyboard-hint">Arrow keys to step through moves</span>
               <label class="sound-toggle"><input id="move-sounds" type="checkbox" checked> <span>Move sounds</span></label>

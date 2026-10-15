@@ -23,6 +23,14 @@ let moveSoundsEnabled = true;
 let soundContext;
 let bestMoveVisible = false;
 let boardFlipped = false;
+let whatIfGame = null;
+let whatIfStartPly = null;
+let whatIfSelectedSquare = "";
+let whatIfBaseline = null;
+let whatIfLastMove = null;
+let whatIfRunning = false;
+let whatIfRequest = 0;
+let whatIfError = "";
 
 function applyGate() {
   analyzeButton.disabled = gameLocked || !pgnValid || ready || analysisRunning;
@@ -65,6 +73,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     gameHistory = [];
     positions.splice(0, positions.length, new Chess().fen());
     selectedPly = 0;
+    exitWhatIf();
     $("#pgn-display").value = "";
     $("#coach-question").value = "";
     $("#coach-question").disabled = true;
@@ -260,12 +269,17 @@ let selectedPly = 0;
 function renderBoard() {
   const boardElement = $("#chessboard");
   const selectedEntry = entries[selectedPly - 1];
-  const showBestPosition = bestMoveVisible && Boolean(selectedEntry?.bestMove);
+  const freeplay = Boolean(whatIfGame);
+  const showBestPosition = !freeplay && bestMoveVisible && Boolean(selectedEntry?.bestMove);
   const positionIndex = showBestPosition ? selectedPly - 1 : selectedPly;
-  const position = new Chess(positions[positionIndex] || new Chess().fen());
+  const position = freeplay ? whatIfGame : new Chess(positions[positionIndex] || new Chess().fen());
   const board = position.board();
-  const playedMove = gameHistory[selectedPly - 1];
+  const playedMove = freeplay ? null : gameHistory[selectedPly - 1];
   const bestMove = showBestPosition ? selectedEntry.bestMove : null;
+  const legalMoves = freeplay && whatIfSelectedSquare
+    ? position.moves({ square: whatIfSelectedSquare, verbose: true })
+    : [];
+  const legalSquares = new Set(legalMoves.map((move) => move.to));
   const cells = [];
   for (let row = 0; row < 8; row += 1) {
     for (let column = 0; column < 8; column += 1) {
@@ -274,6 +288,22 @@ function renderBoard() {
       const square = displayed.name;
       const cell = document.createElement("div");
       cell.className = `square ${(displayed.row + displayed.column) % 2 ? "dark" : "light"}`;
+      if (freeplay) {
+        cell.classList.add("freeplay");
+        cell.tabIndex = 0;
+        if (square === whatIfSelectedSquare) cell.classList.add("is-selected");
+        if (legalSquares.has(square)) {
+          cell.classList.add("is-legal");
+          if (piece) cell.classList.add("has-piece");
+        }
+        cell.addEventListener("click", () => handleWhatIfSquare(square));
+        cell.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleWhatIfSquare(square);
+          }
+        });
+      }
       const highlightedMove = showBestPosition ? null : playedMove;
       if (highlightedMove?.from === square) cell.classList.add("last-from");
       if (highlightedMove?.to === square) cell.classList.add("last-to");
@@ -300,9 +330,11 @@ function renderBoard() {
   boardElement.replaceChildren(...cells);
   if (bestMove) appendBestArrow(boardElement, bestMove);
   boardElement.setAttribute("aria-label", `Chess position after the selected move, shown from ${boardFlipped ? "Black" : "White"}'s perspective`);
-  $("#previous-move").disabled = gameLocked || selectedPly === 0;
-  $("#next-move").disabled = gameLocked || selectedPly >= gameHistory.length;
-  $("#move-position").textContent = selectedPly === 0
+  $("#previous-move").disabled = gameLocked || freeplay || selectedPly === 0;
+  $("#next-move").disabled = gameLocked || freeplay || selectedPly >= gameHistory.length;
+  $("#move-position").textContent = freeplay
+    ? `Freeplay · ${whatIfGame.turn() === "w" ? "White" : "Black"} to move`
+    : selectedPly === 0
     ? "Start position"
     : showBestPosition
       ? `Best move for ${Math.ceil(selectedPly / 2)}${selectedPly % 2 ? "." : "..."} · before ${selectedEntry.actualSan}`
@@ -338,7 +370,7 @@ function appendBestArrow(boardElement, uciMove) {
 }
 
 function jumpToPly(ply) {
-  if (gameLocked) return;
+  if (gameLocked || whatIfGame) return;
   const previousPly = selectedPly;
   selectedPly = Math.max(0, Math.min(gameHistory.length, ply));
   for (const button of $("#move-list").querySelectorAll(".move-token")) {
@@ -358,8 +390,11 @@ function renderSelectedMovePanel() {
   if (!ready || !entry) {
     const placeholder = document.createElement("p");
     placeholder.className = "move-panel-placeholder";
-    placeholder.textContent = "Analyze the completed game to see move ratings and engine alternatives.";
+    placeholder.textContent = pgnValid
+      ? "You can explore this position now, or analyze the full game for move-by-move ratings."
+      : "Analyze the completed game to see move ratings and engine alternatives.";
     panel.append(placeholder);
+    if (pgnValid) panel.append(createExploreButton());
     return;
   }
 
@@ -394,6 +429,8 @@ function renderSelectedMovePanel() {
   });
   actions.append(bestButton);
 
+  actions.append(createExploreButton());
+
   const coachButton = document.createElement("button");
   coachButton.className = "move-panel-coach";
   coachButton.type = "button";
@@ -413,6 +450,141 @@ function renderSelectedMovePanel() {
   });
   actions.append(coachButton);
   panel.append(actions);
+}
+
+function createExploreButton() {
+  const button = document.createElement("button");
+  button.className = "move-panel-explore";
+  button.type = "button";
+  button.disabled = gameLocked || !pgnValid;
+  button.textContent = "Explore alternatives from here";
+  button.addEventListener("click", startWhatIf);
+  return button;
+}
+
+function startWhatIf() {
+  if (gameLocked || !pgnValid) return;
+  whatIfGame = new Chess(positions[selectedPly] || new Chess().fen());
+  whatIfStartPly = selectedPly;
+  whatIfSelectedSquare = "";
+  whatIfBaseline = null;
+  whatIfLastMove = null;
+  whatIfError = "";
+  bestMoveVisible = false;
+  renderBoard();
+  renderWhatIfPanel();
+  analyzeWhatIfPosition();
+}
+
+function exitWhatIf() {
+  whatIfRequest += 1;
+  whatIfGame = null;
+  whatIfStartPly = null;
+  whatIfSelectedSquare = "";
+  whatIfBaseline = null;
+  whatIfLastMove = null;
+  whatIfError = "";
+  whatIfRunning = false;
+  const panel = $("#what-if-panel");
+  if (panel) panel.hidden = true;
+}
+
+function renderWhatIfPanel() {
+  const panel = $("#what-if-panel");
+  panel.hidden = !whatIfGame;
+  if (!whatIfGame) return;
+  const evaluation = $("#what-if-evaluation");
+  const status = $("#what-if-status");
+  const line = $("#what-if-line");
+  const undo = $("#what-if-undo");
+  undo.disabled = whatIfRunning || whatIfGame.history().length === 0;
+  if (whatIfRunning) {
+    evaluation.textContent = "Stockfish is thinking…";
+    status.textContent = "Evaluating this exact position locally…";
+    line.textContent = "";
+    return;
+  }
+  if (whatIfError) {
+    evaluation.textContent = "Evaluation unavailable";
+    status.textContent = `Stockfish could not evaluate this line: ${whatIfError}`;
+    line.textContent = "Try another move, or reload the extension after running npm run build.";
+    return;
+  }
+  evaluation.textContent = whatIfBaseline?.result?.score ? formatEvaluation(whatIfBaseline.result.score) : "Evaluation unavailable";
+  if (whatIfLastMove?.rating) {
+    const mark = moveMark(whatIfLastMove.rating.category);
+    status.textContent = `${whatIfLastMove.move.san}: ${mark.icon} ${mark.label}. ${whatIfLastMove.rating.loss > 0 ? `It gives away about ${(whatIfLastMove.rating.loss / 100).toFixed(1)} pawn${Math.abs(whatIfLastMove.rating.loss) === 100 ? "" : "s"} of value.` : "It holds or improves the position."}`;
+  } else {
+    status.textContent = `Started from move ${whatIfStartPly === 0 ? "1" : whatIfStartPly}. Click a piece, then a highlighted square; each alternate move is scored by Stockfish.`;
+  }
+  const result = whatIfBaseline?.result;
+  const best = result ? uciToSan(whatIfGame.fen(), result.bestmove) : "";
+  const pv = result ? uciLineToSan(whatIfGame.fen(), result.pv, 4).join(" ") : "";
+  line.textContent = best ? `Stockfish now prefers ${best}${pv ? ` · line: ${pv}` : ""}` : "";
+}
+
+function handleWhatIfSquare(square) {
+  if (!whatIfGame || whatIfRunning) return;
+  const piece = whatIfGame.get(square);
+  if (!whatIfSelectedSquare) {
+    if (piece?.color === whatIfGame.turn()) {
+      whatIfSelectedSquare = square;
+      renderBoard();
+    }
+    return;
+  }
+  if (piece?.color === whatIfGame.turn()) {
+    whatIfSelectedSquare = square;
+    renderBoard();
+    return;
+  }
+  const move = whatIfGame.moves({ square: whatIfSelectedSquare, verbose: true }).find((candidate) => candidate.to === square);
+  if (!move) {
+    whatIfSelectedSquare = "";
+    renderBoard();
+    return;
+  }
+  const before = whatIfBaseline;
+  const played = whatIfGame.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
+  whatIfSelectedSquare = "";
+  whatIfLastMove = { move: played, rating: null };
+  renderBoard();
+  renderWhatIfPanel();
+  analyzeWhatIfPosition(before, played);
+}
+
+async function analyzeWhatIfPosition(previous = null, played = null) {
+  if (!whatIfGame) return;
+  const request = ++whatIfRequest;
+  const fen = whatIfGame.fen();
+  whatIfError = "";
+  whatIfRunning = true;
+  renderWhatIfPanel();
+  let engine;
+  try {
+    engine = new UciEngine(new Worker(chrome.runtime.getURL("vendor/stockfish/stockfish-19-lite-single.js")));
+    await engine.start();
+    const result = await engine.analyze(fen, 12);
+    if (request !== whatIfRequest || !whatIfGame || whatIfGame.fen() !== fen) return;
+    const rating = previous?.result && played
+      ? classifyPlayedMove({ beforeScore: previous.result.score, afterScore: result.score, turn: played.color, actualSan: played.san, bestSan: uciToSan(previous.fen, previous.result.bestmove), checkmatedOpponent: whatIfGame.isCheckmate() })
+      : null;
+    whatIfBaseline = { fen, result };
+    if (played) whatIfLastMove = { move: played, rating };
+  } catch (error) {
+    if (request === whatIfRequest) {
+      whatIfBaseline = null;
+      whatIfLastMove = { move: played || whatIfLastMove?.move, rating: null };
+      whatIfError = error.message;
+    }
+  } finally {
+    engine?.stop();
+    if (request === whatIfRequest) {
+      whatIfRunning = false;
+      renderBoard();
+      renderWhatIfPanel();
+    }
+  }
 }
 
 function playMoveCue(ply) {
@@ -850,6 +1022,7 @@ async function initialize() {
     selectedPly = gameHistory.length;
     renderBoard();
     pgnValid = true;
+    renderSelectedMovePanel();
     $("#review-summary").textContent = `${gameHistory.length} half-moves ready for local Stockfish review.`;
     if (gameLocked) {
       $("#coach-privacy").textContent = "A game is in progress. Analysis and coaching are locked until its result is confirmed.";
@@ -872,8 +1045,24 @@ $("#flip-board").addEventListener("click", () => {
   $("#flip-board").setAttribute("aria-pressed", String(boardFlipped));
   renderBoard();
 });
+$("#what-if-undo").addEventListener("click", () => {
+  if (!whatIfGame || whatIfRunning || !whatIfGame.history().length) return;
+  whatIfGame.undo();
+  whatIfSelectedSquare = "";
+  whatIfLastMove = null;
+  whatIfBaseline = null;
+  whatIfError = "";
+  renderBoard();
+  renderWhatIfPanel();
+  analyzeWhatIfPosition();
+});
+$("#what-if-exit").addEventListener("click", () => {
+  exitWhatIf();
+  renderBoard();
+  renderSelectedMovePanel();
+});
 document.addEventListener("keydown", (event) => {
-  if (event.altKey || event.ctrlKey || event.metaKey || gameLocked) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || gameLocked || whatIfGame) return;
   const target = event.target;
   if (target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"))) return;
   const nextPly = adjacentPly(selectedPly, event.key, gameHistory.length);
