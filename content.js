@@ -8,6 +8,8 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
   window.__aftermoveObserverInstalled = true;
 
   const moveSelectorGroups = [
+    "wc-simple-move-list .node[data-node], wc-simple-move-list .node",
+    "[data-node='mainline-ply'], [data-node='variation-ply']",
     "[data-ply]",
     "[data-san], [data-uci], [data-move]",
     "wc-simple-move, .move-text-component, .main-line-ply, .node"
@@ -63,7 +65,7 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
   }
 
   function terminalResult() {
-    const selectors = [
+    const resultSelectors = [
       ".game-over-modal-content",
       ".game-over-modal",
       ".game-over-message",
@@ -78,10 +80,14 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
       '[data-testid*="game-over"]',
       '[class*="game-over"]'
     ];
-    const texts = [...document.querySelectorAll(selectors.join(","))]
+    const moveListSelectors = ["wc-simple-move-list", ".vertical-move-list", ".move-list"];
+    const visibleText = (selectors) => [...document.querySelectorAll(selectors.join(","))]
       .filter((element) => element.getClientRects().length)
       .map((element) => element.innerText || element.textContent || "");
-    return terminalResultFromTexts(texts);
+    // Some Chess.com views show only the final 1-0 / 0-1 / draw marker in the
+    // move list, not a separate result modal. That marker is still definitive.
+    return terminalResultFromTexts(visibleText(resultSelectors))
+      || terminalResultFromTexts(visibleText(moveListSelectors));
   }
 
   function makePgn(result) {

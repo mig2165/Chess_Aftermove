@@ -123,6 +123,7 @@ class UciEngine {
   analyze(fen, depth = 10) {
     return new Promise((resolve, reject) => {
       let latestScore = null;
+      let latestPv = [];
       const timeout = setTimeout(() => {
         this.waiter = null;
         reject(new Error("Stockfish analysis timed out. Try a shorter game."));
@@ -136,6 +137,8 @@ class UciEngine {
         }
         if (line.startsWith("info ")) {
           latestScore = scoreFromInfo(line, fen.split(" ")[1]);
+          const pv = line.match(/\bpv\s+(.+)$/);
+          if (pv) latestPv = pv[1].trim().split(/\s+/).filter(Boolean);
         }
         if (line.startsWith("bestmove ")) {
           clearTimeout(timeout);
@@ -144,7 +147,7 @@ class UciEngine {
             reject(new Error("Stockfish returned no evaluation for a position."));
             return;
           }
-          resolve({ score: latestScore, bestmove: line.split(/\s+/)[1] });
+          resolve({ score: latestScore, bestmove: line.split(/\s+/)[1], pv: latestPv });
         }
       };
       this.worker.postMessage(`position fen ${fen}`);
@@ -174,6 +177,21 @@ function uciToSan(fen, move) {
   }
 }
 
+function uciLineToSan(fen, moves, limit = 5) {
+  const board = new Chess(fen);
+  const line = [];
+  for (const move of (moves || []).slice(0, limit)) {
+    try {
+      const played = board.move({ from: move.slice(0, 2), to: move.slice(2, 4), promotion: move[4]?.toLowerCase() });
+      if (!played) break;
+      line.push(played.san);
+    } catch {
+      break;
+    }
+  }
+  return line;
+}
+
 function humanNote(entry) {
   const move = entry.actualSan;
   const best = entry.bestSan;
@@ -199,6 +217,16 @@ function bestMoveReason(entry) {
     return `The played move ${entry.actualSan} scored better than Stockfish’s initial ${entry.bestSan} choice at this search depth. Engine preferences can change at deeper searches.`;
   }
   return `Stockfish’s top choice was ${entry.bestSan}. The evaluation difference was small at depth 10, so this is an alternative, not a clear correction.`;
+}
+
+function tacticalExplanation(entry) {
+  const bestLine = entry.bestLine?.join(" ");
+  const consequenceLine = entry.consequenceLine?.join(" ");
+  const parts = [humanNote(entry), bestMoveReason(entry)];
+  if (bestLine && bestLine !== entry.actualSan) parts.push(`Better plan: ${bestLine}.`);
+  if (consequenceLine) parts.push(`After ${entry.actualSan}, Stockfish’s concrete reply is: ${consequenceLine}.`);
+  if (!consequenceLine && entry.loss >= 75) parts.push("The local engine did not return a full reply line, so this review can show the evaluation swing but not responsibly invent a tactic.");
+  return parts.join(" ");
 }
 
 function moveNumber(entry) {
@@ -470,7 +498,7 @@ function renderFindings(analysis) {
     title.className = "finding-title";
     title.textContent = entry.checkmate ? "Checkmate" : ({
       best: "Engine’s top choice",
-      excellent: "Excellent move",
+      excellent: "Great move",
       inaccuracy: "An inaccuracy",
       mistake: "A mistake",
       blunder: "A blunder"
@@ -607,6 +635,7 @@ async function analyzeGame() {
       const fen = replay.fen();
       const turn = replay.turn();
       const bestSan = uciToSan(fen, before.bestmove);
+      const bestLine = uciLineToSan(fen, before.pv);
       const actual = replay.move({ from: playedMove.from, to: playedMove.to, promotion: playedMove.promotion });
       const checkmate = replay.isCheckmate();
       if (checkmate) {
@@ -623,6 +652,8 @@ async function analyzeGame() {
           actualSan: actual.san,
           bestSan,
           bestMove: before.bestmove,
+          bestLine,
+          consequenceLine: [],
           ...classification,
           checkmate: true,
           beforeScore: before.score,
@@ -645,6 +676,8 @@ async function analyzeGame() {
         actualSan: actual.san,
         bestSan,
         bestMove: before.bestmove,
+        bestLine,
+        consequenceLine: uciLineToSan(replay.fen(), after.pv),
         loss: Math.round(loss),
         category,
         checkmate: false,
@@ -708,7 +741,9 @@ function aiContext(focusEntry = null) {
       engineChoice: focusEntry.bestSan,
       centipawnSwing: focusEntry.loss,
       label: moveMark(focusEntry.category, focusEntry.checkmate).label,
-      explanation: bestMoveReason(focusEntry)
+      explanation: tacticalExplanation(focusEntry),
+      bestLine: focusEntry.bestLine,
+      consequenceLine: focusEntry.consequenceLine
     } : null
   };
 }
@@ -720,7 +755,7 @@ async function askCoach(question, focusEntry = null) {
   if (!settings.aiEnabled || !settings.aiKey) {
     if (focusEntry) {
       if (focusEntry.category === "best") return `${moveNumber(focusEntry)} matches Stockfish’s top choice at depth 10. The engine confirms the move, but it can’t know the thought behind it.`;
-      return `${humanNote(focusEntry)} ${bestMoveReason(focusEntry)}`;
+        return tacticalExplanation(focusEntry);
     }
     const moveNumberMatch = question.match(/\b(\d+)\s*\.{1,3}/);
     const requestedNumber = moveNumberMatch ? Number(moveNumberMatch[1]) : null;
@@ -750,7 +785,7 @@ async function askCoach(question, focusEntry = null) {
       messages: [
         {
           role: "system",
-          content: "You are a kind, lightly witty chess coach. This is a completed game; never suggest or reveal live-game moves. Ground every chess claim in the supplied PGN and Stockfish findings. If a selectedMove is supplied, answer about that exact move and compare it with the engine's choice. Explain strategic ideas only when supported by the position; otherwise say that the engine establishes the evaluation, not a definitive reason. Do not assume which color the user played unless the PGN or question identifies it. Explain the player's likely plan as a possibility, not a fact. Keep the answer concise, constructive, and specific. Stockfish is an engine, not proof of the player's intent."
+      content: "You are a kind, lightly witty chess coach. This is a completed game; never suggest or reveal live-game moves. Ground every chess claim in the supplied PGN and Stockfish findings. If a selectedMove is supplied, answer about that exact move and compare it with the engine's choice. For a weak move, do not stop at an evaluation label: name the concrete opponent reply or sequence from consequenceLine, explain the immediate tactical or positional threat it creates, and then contrast it with bestLine. If no concrete line is supplied, say so rather than inventing one. Explain strategic ideas only when supported by the position; otherwise say that the engine establishes the evaluation, not a definitive reason. Do not assume which color the user played unless the PGN or question identifies it. Explain the player's likely plan as a possibility, not a fact. Keep the answer concise, constructive, and specific. Stockfish is an engine, not proof of the player's intent."
         },
         {
           role: "user",

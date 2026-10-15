@@ -112,9 +112,10 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.035em; }
 .move-token[data-category="blunder"] .move-icon, .move-token[data-category="mistake"] .move-icon, .move-token[data-category="inaccuracy"] .move-icon { color: #ff9b8a; }
 .move-token[data-category="excellent"] .move-icon, .move-token[data-category="best"] .move-icon { color: var(--accent); }
 .move-token[data-category="brilliant"] .move-icon { color: #83dcda; }
-.legend { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 12px 0 0; color: var(--muted); font-size: 11px; }
-.legend-bad { margin-left: 3px; color: #ff9b8a; }
-.legend-good { margin-left: 5px; color: var(--accent); }
+.move-key { margin-top: 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.move-key summary { color: #d5dfd7; cursor: pointer; font-weight: 650; }
+.move-key ul { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 18px; }
+.move-key b { color: #eef3ed; }
 .findings-list { margin-top: 20px; }
 .empty-state { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .finding { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; gap: 18px; align-items: start; padding: 19px 0; border-top: 1px solid #2b3732; }

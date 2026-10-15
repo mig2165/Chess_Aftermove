@@ -70,7 +70,18 @@
           <div class="notation-column">
             <div class="notation-heading"><span>MOVE</span><span>WHITE</span><span>BLACK</span></div>
             <div id="move-list" class="move-list" aria-label="Game moves"></div>
-            <p class="legend"><span class="legend-bad">●</span> Inaccuracy / mistake / blunder <span class="legend-good">●</span> Best / excellent</p>
+            <details class="move-key">
+              <summary>What the move symbols mean</summary>
+              <ul>
+                <li><b>‼ Blunder</b> — a major evaluation drop (about 3 pawns or more).</li>
+                <li><b>! Mistake</b> — a clear loss of ground (about 1.5–3 pawns).</li>
+                <li><b>?! Inaccuracy</b> — a smaller but meaningful slip (about 0.75–1.5 pawns).</li>
+                <li><b>· Good</b> — keeps the position roughly steady.</li>
+                <li><b>✦ Great</b> — improves the evaluation by about a pawn or more.</li>
+                <li><b>✓ Best</b> — matches Stockfish’s top move at this depth.</li>
+                <li><b>Brilliant</b> — not assigned yet; it needs deeper sacrifice analysis than this local review runs.</li>
+              </ul>
+            </details>
           </div>
         </div>
       </section>
@@ -93,7 +104,7 @@
         <p id="coach-privacy" class="privacy-note">Built-in notes stay on this device. Optional AI is off until enabled in the extension settings.</p>
         <form id="coach-form">
           <label class="visually-hidden" for="coach-question">Question about the finished game</label>
-          <textarea id="coach-question" rows="2" placeholder="What was my plan with 18...Qh4?"></textarea>
+          <textarea id="coach-question" rows="2" placeholder="Why was 18...Qh4 a mistake? What could my opponent do next?"></textarea>
           <button id="coach-button" class="secondary-button" type="submit" disabled>Ask about this finished game</button>
         </form>
         <div id="coach-answer" class="coach-answer" aria-live="polite"></div>
