@@ -1,0 +1,89 @@
+<!doctype html>
+<!-- THESIS: A calm control desk for a coach that listens during play and speaks only after the result.
+OWN-WORLD: Graphite boardroom, chalk-white score notation, and a single sharp chartreuse marker.
+STORY: Start a silent recording, fetch a public recent game, or bring in a PGN; then move to the review.
+FIRST VIEWPORT: Recording state and the current-game action lead, followed by account lookup and PGN import.
+FORM: Operate-mode extension popup, one narrow task surface; no dashboard cards or live move display. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aftermove</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="masthead">
+        <div class="brand-mark" aria-hidden="true">A</div>
+        <div>
+          <h1>Aftermove</h1>
+          <p class="brand-note">A chess review buddy</p>
+        </div>
+        <span class="silence-mark"><span></span> quiet in-game</span>
+      </header>
+
+      <section class="record-section" aria-labelledby="record-heading">
+        <div class="section-heading">
+          <p class="section-index">CURRENT GAME</p>
+          <p id="record-state" class="state-copy">Ready when you are.</p>
+        </div>
+        <h2 id="record-heading">Play first.<br><em>We’ll talk after.</em></h2>
+        <p class="description">Record moves on this Chess.com tab. No hints, scores, or commentary while you play.</p>
+        <button id="record-button" class="primary-button" type="button">Record this game</button>
+        <button id="stop-recording-button" class="secondary-button stop-recording-button" type="button" hidden>Stop recording &amp; discard capture</button>
+        <p id="record-error" class="error-copy" role="status" hidden></p>
+        <p id="stop-recording-status" class="status-copy" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="lookup-section" aria-labelledby="lookup-heading">
+        <div class="section-heading">
+          <p class="section-index">ALREADY FINISHED?</p>
+          <p class="section-side-note">Public games only</p>
+        </div>
+        <h2 id="lookup-heading">Find your latest game</h2>
+        <form id="lookup-form" class="inline-form">
+          <label class="visually-hidden" for="username">Chess.com username</label>
+          <span class="input-prefix" aria-hidden="true">@</span>
+          <input id="username" name="username" autocomplete="username" placeholder="Chess.com username" required>
+          <button type="submit" aria-label="Find latest game">Go <span aria-hidden="true">↗</span></button>
+        </form>
+        <p id="lookup-status" class="status-copy" role="status" aria-live="polite"></p>
+      </section>
+
+      <details class="import-section">
+        <summary>Import a finished PGN</summary>
+        <label class="field-label" for="pgn-file">Choose a PGN file</label>
+        <input id="pgn-file" class="pgn-file-input" type="file" accept=".pgn,.txt,text/plain">
+        <p id="import-status" class="status-copy" role="status" aria-live="polite"></p>
+        <p class="import-divider">or paste PGN notation</p>
+        <label class="visually-hidden" for="pgn-input">Completed game PGN</label>
+        <textarea id="pgn-input" rows="4" placeholder='[Event "Casual Game"]&#10;1. e4 e5 ...'></textarea>
+        <button id="pgn-button" class="secondary-button" type="button">Review pasted game</button>
+      </details>
+
+      <details class="coach-settings">
+        <summary>Optional AI coach</summary>
+        <p>Built-in move notes work without AI. If enabled, your key stays on this device; a finished PGN and engine findings are sent only when you ask a question.</p>
+        <label class="checkbox-row">
+          <input id="ai-enabled" type="checkbox">
+          <span>Enable OpenAI coaching after games</span>
+        </label>
+        <label class="field-label" for="ai-model">Model</label>
+        <input id="ai-model" class="settings-input" placeholder="gpt-4o-mini">
+        <label class="field-label" for="ai-key">API key</label>
+        <input id="ai-key" class="settings-input" type="password" autocomplete="off" placeholder="Paste your own API key">
+        <button id="save-settings" class="secondary-button" type="button">Save AI settings</button>
+        <p id="settings-status" class="status-copy" role="status" aria-live="polite"></p>
+      </details>
+
+          <footer>
+        <span>Stockfish review runs on your device.</span>
+            <span class="footer-links">
+              <a href="popup.html?fullPage=1" target="_blank" rel="noreferrer">Open full-page view</a>
+              <a href="https://github.com/mig2165/Chess_ai" target="_blank" rel="noreferrer">About</a>
+            </span>
+          </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

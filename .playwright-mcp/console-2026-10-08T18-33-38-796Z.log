@@ -1,0 +1,4 @@
+[      78ms] TypeError: Cannot read properties of undefined (reading 'onChanged')
+    at http://127.0.0.1:8766/review.js:3577:18
+    at http://127.0.0.1:8766/review.js:4356:3
+[     262ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8766/favicon.ico:0

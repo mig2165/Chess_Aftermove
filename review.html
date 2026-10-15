@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Game review · Aftermove</title>
+    <link rel="stylesheet" href="review.css">
+  </head>
+  <body>
+    <main class="review-shell">
+      <header class="review-header">
+        <a class="wordmark" href="popup.html"><span>A</span> AFTERMOVE</a>
+        <div class="privacy"><i></i> POST-GAME REVIEW</div>
+      </header>
+
+      <section class="review-intro">
+        <div>
+          <p class="section-index">THE GAME IS OVER. NOW WE CAN TALK.</p>
+          <h1 id="review-title">Let’s look at the game.</h1>
+          <p id="review-summary" class="summary">Stockfish will review the completed game on this device.</p>
+        </div>
+        <button id="analyze-button" class="primary-button" type="button" disabled>Analyze with Stockfish</button>
+      </section>
+
+      <section id="progress-region" class="progress-region" aria-live="polite" hidden>
+        <div class="progress-copy"><span id="progress-message">Starting engine…</span><span id="progress-number"></span></div>
+        <div class="progress-track"><span id="progress-bar"></span></div>
+      </section>
+      <p id="error-message" class="error-message" role="alert" hidden></p>
+
+      <section class="analysis-section">
+        <div class="section-heading">
+          <h2>Replay the game</h2>
+          <span id="finding-count">Waiting for analysis</span>
+        </div>
+        <div id="move-summary" class="move-summary" aria-live="polite" hidden></div>
+        <div class="replay-layout">
+          <div class="board-column">
+            <div id="chessboard" class="chessboard" role="grid" aria-label="Chess position after the selected move"></div>
+            <div class="board-controls">
+              <button id="previous-move" class="board-button" type="button" aria-label="Previous move" aria-keyshortcuts="ArrowLeft ArrowUp" disabled>←</button>
+              <span id="move-position" aria-live="polite">Start position</span>
+              <button id="next-move" class="board-button" type="button" aria-label="Next move" aria-keyshortcuts="ArrowRight ArrowDown" disabled>→</button>
+            </div>
+            <div class="board-actions">
+              <button id="flip-board" class="flip-board-button" type="button" aria-pressed="false">↻ Flip board</button>
+            </div>
+            <section id="advantage-panel" class="advantage-panel" aria-label="Position advantage">
+              <div class="advantage-heading">
+                <h3>Position advantage</h3>
+                <span id="advantage-evaluation">Not analyzed yet</span>
+              </div>
+              <div class="advantage-parties" aria-hidden="true"><span>WHITE</span><span>BLACK</span></div>
+              <div id="advantage-track" class="advantage-track" data-state="waiting" role="img" aria-label="Position advantage is not yet available">
+                <span id="advantage-white" class="advantage-white"></span>
+                <span class="advantage-center"></span>
+              </div>
+              <p id="advantage-swing" class="advantage-swing">Load a completed PGN, then select Analyze with Stockfish to see the evaluation and move-by-move change.</p>
+              <p class="advantage-note">Stockfish scale, not win probability.</p>
+            </section>
+            <section id="selected-move-panel" class="selected-move-panel" aria-live="polite">
+              <p class="move-panel-placeholder">Analyze the completed game to see move ratings and engine alternatives.</p>
+            </section>
+            <div class="replay-options">
+              <span class="keyboard-hint">Arrow keys to step through moves</span>
+              <label class="sound-toggle"><input id="move-sounds" type="checkbox" checked> <span>Move sounds</span></label>
+            </div>
+            <p id="sound-status" class="visually-hidden" aria-live="polite"></p>
+          </div>
+          <div class="notation-column">
+            <div class="notation-heading"><span>MOVE</span><span>WHITE</span><span>BLACK</span></div>
+            <div id="move-list" class="move-list" aria-label="Game moves"></div>
+            <p class="legend"><span class="legend-bad">●</span> Inaccuracy / mistake / blunder <span class="legend-good">●</span> Best / excellent</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="findings-section">
+        <div class="section-heading">
+          <h2>Coach’s notes</h2>
+          <span>Tap a move to jump to it</span>
+        </div>
+        <div id="findings" class="findings-list">
+          <p class="empty-state">The engine is ready when you are. Analysis begins only on this completed-game screen.</p>
+        </div>
+      </section>
+
+      <section class="coach-section">
+        <div class="section-heading">
+          <h2>Ask the coach</h2>
+          <span class="engine-note">Engine-backed, human-readable</span>
+        </div>
+        <p id="coach-privacy" class="privacy-note">Built-in notes stay on this device. Optional AI is off until enabled in the extension settings.</p>
+        <form id="coach-form">
+          <label class="visually-hidden" for="coach-question">Question about the finished game</label>
+          <textarea id="coach-question" rows="2" placeholder="What was my plan with 18...Qh4?"></textarea>
+          <button id="coach-button" class="secondary-button" type="submit" disabled>Ask about this finished game</button>
+        </form>
+        <div id="coach-answer" class="coach-answer" aria-live="polite"></div>
+      </section>
+
+      <details class="game-record">
+        <summary>Show the recorded PGN</summary>
+        <textarea id="pgn-display" readonly rows="8" aria-label="Recorded PGN"></textarea>
+      </details>
+
+      <footer>
+        <span>Stockfish calculations stay local. No live hints were shown.</span>
+        <a href="https://github.com/mig2165/Chess_ai" target="_blank" rel="noreferrer">Source & notices</a>
+      </footer>
+    </main>
+    <script src="review.js"></script>
+  </body>
+</html>

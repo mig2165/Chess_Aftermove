@@ -1,0 +1,156 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  background: #101719;
+  color: #f3f5ef;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --muted: #a8b5ae;
+  --quiet: #74827b;
+  --line: #34413d;
+  --accent: #d8f36a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 390px;
+  min-width: 340px;
+  margin: 0;
+  background:
+    radial-gradient(ellipse at 92% 3%, rgba(216, 243, 106, .09), transparent 42%),
+    #101719;
+}
+
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+
+.app-shell { padding: 24px 24px 16px; }
+
+.masthead {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding-bottom: 19px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--accent);
+  border-radius: 10px 10px 10px 3px;
+  color: var(--accent);
+  font-family: Georgia, serif;
+  font-size: 21px;
+  font-weight: 700;
+}
+
+h1 { margin: 0; font-size: 15px; letter-spacing: -.03em; }
+.brand-note { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+
+.silence-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .02em;
+}
+
+.silence-mark span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(216, 243, 106, .12);
+}
+
+.record-section { padding: 23px 0 24px; border-bottom: 1px solid var(--line); }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.section-index { margin: 0; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .14em; }
+.section-side-note, .state-copy { margin: 0; color: var(--muted); font-size: 10px; }
+h2 { margin: 15px 0 8px; font-size: 23px; letter-spacing: -.045em; line-height: 1.12; }
+.record-section h2 em { color: var(--accent); font-family: Georgia, serif; font-weight: 400; }
+.description { max-width: 39ch; margin: 0; color: #c2ccc6; font-size: 12px; line-height: 1.5; }
+
+.primary-button {
+  width: 100%;
+  min-height: 43px;
+  margin-top: 17px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #17200e;
+  font-size: 12px;
+  font-weight: 750;
+  transition: transform 150ms ease-out, background 150ms ease-out;
+}
+
+.primary-button:hover { transform: translateY(-1px); background: #e6ff83; }
+.primary-button:disabled { cursor: not-allowed; opacity: .65; transform: none; }
+.primary-button.is-recording { background: #293830; color: var(--accent); outline: 1px solid #627247; }
+.stop-recording-button { width: 100%; color: #ffb1a4; border-color: #70463f; }
+.stop-recording-button:hover { background: #382925; }
+.stop-recording-button:disabled { cursor: wait; opacity: .6; }
+
+.lookup-section { padding: 20px 0 17px; }
+.lookup-section h2 { margin: 13px 0 12px; font-size: 17px; letter-spacing: -.025em; }
+.inline-form { position: relative; display: flex; align-items: center; }
+.input-prefix { position: absolute; left: 12px; color: var(--quiet); font-size: 13px; }
+.inline-form input, .settings-input, textarea {
+  width: 100%;
+  border: 1px solid #394641;
+  border-radius: 4px;
+  background: #172120;
+  color: #f3f5ef;
+  outline: none;
+}
+.inline-form input { height: 40px; padding: 0 64px 0 29px; font-size: 12px; }
+.inline-form input:focus, .settings-input:focus, textarea:focus { border-color: var(--accent); }
+.inline-form input::placeholder, textarea::placeholder { color: #829088; }
+.inline-form button {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  height: 32px;
+  min-width: 52px;
+  border: 0;
+  border-radius: 3px;
+  background: #293831;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.inline-form button:hover, .secondary-button:hover { background: #37483c; }
+.status-copy, .error-copy { min-height: 14px; margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.error-copy { color: #ff9d8d; }
+
+details { border-top: 1px solid var(--line); }
+summary { padding: 13px 0; color: #d1d9d3; cursor: pointer; font-size: 11px; font-weight: 650; list-style-position: inside; }
+summary::marker { color: var(--accent); }
+.import-section textarea { display: block; min-height: 78px; resize: vertical; padding: 10px; font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; line-height: 1.5; }
+.secondary-button { min-height: 34px; margin-top: 9px; padding: 0 12px; border: 1px solid #46554e; border-radius: 4px; background: #24302b; color: #edf2eb; font-size: 10px; font-weight: 650; }
+.pgn-file-input { display: block; width: 100%; min-height: 38px; padding: 4px; border: 1px solid #394641; border-radius: 4px; background: #172120; color: #c2ccc6; font-size: 10px; }
+.pgn-file-input::file-selector-button { min-height: 28px; margin-right: 10px; padding: 0 10px; border: 1px solid #46554e; border-radius: 3px; background: #293831; color: var(--accent); font: inherit; font-weight: 650; cursor: pointer; }
+.pgn-file-input:disabled { cursor: not-allowed; opacity: .6; }
+.import-divider { margin: 12px 0 7px; color: var(--quiet); font-size: 9px; text-align: center; }
+.coach-settings > p { margin: 0 0 12px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 12px; color: #e0e6e0; font-size: 10px; }
+.checkbox-row input { accent-color: var(--accent); }
+.field-label { display: block; margin: 10px 0 5px; color: var(--muted); font-size: 10px; }
+.settings-input { height: 34px; padding: 0 9px; font-size: 11px; }
+footer { display: flex; justify-content: space-between; gap: 10px; padding-top: 14px; color: var(--quiet); font-size: 9px; }
+.footer-links { display: inline-flex; flex-wrap: wrap; gap: 12px; }
+footer a { color: #b5c1ba; text-decoration-color: #65736a; text-underline-offset: 2px; }
+.full-page body { width: min(100%, 820px); min-width: 0; min-height: 100vh; margin: 0 auto; }
+.full-page .app-shell { padding: 40px clamp(24px, 5vw, 56px) 28px; }
+.full-page .record-section { padding-top: 34px; padding-bottom: 34px; }
+.full-page .record-section h2 { font-size: 30px; }
+.full-page .description { max-width: 58ch; }
+button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; clip-path: inset(50%); }

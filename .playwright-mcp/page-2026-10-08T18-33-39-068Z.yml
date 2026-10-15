@@ -1,0 +1,63 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - link "A AFTERMOVE" [ref=e4] [cursor=pointer]:
+      - /url: popup.html
+      - generic [ref=e5]: A
+      - text: AFTERMOVE
+    - generic [ref=e6]: POST-GAME REVIEW
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - paragraph [ref=e10]: THE GAME IS OVER. NOW WE CAN TALK.
+      - heading "Let’s look at the game." [level=1] [ref=e11]
+      - paragraph [ref=e12]: Stockfish will review the completed game on this device.
+    - button "Analyze with Stockfish" [disabled] [ref=e13]
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - heading "Replay the game" [level=2] [ref=e16]
+      - generic [ref=e17]: Waiting for analysis
+    - generic [ref=e19]:
+      - generic [ref=e20]:
+        - grid "Chess position after the selected move" [ref=e21]
+        - generic [ref=e22]:
+          - button "Previous move" [disabled] [ref=e23]: ←
+          - generic [ref=e24]: Start position
+          - button "Next move" [disabled] [ref=e25]: →
+        - paragraph [ref=e27]: Analyze the completed game to see move ratings and engine alternatives.
+        - generic [ref=e28]:
+          - generic [ref=e29]: Arrow keys to step through moves
+          - generic [ref=e30] [cursor=pointer]:
+            - checkbox "Move sounds" [checked] [ref=e31]
+            - generic [ref=e32]: Move sounds
+        - paragraph [ref=e33]
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - generic [ref=e36]: MOVE
+          - generic [ref=e37]: WHITE
+          - generic [ref=e38]: BLACK
+        - generic "Game moves" [ref=e39]
+        - paragraph [ref=e40]:
+          - generic [ref=e41]: ●
+          - text: Inaccuracy / mistake / blunder
+          - generic [ref=e42]: ●
+          - text: Best / excellent
+  - generic [ref=e43]:
+    - generic [ref=e44]:
+      - heading "Coach’s notes" [level=2] [ref=e45]
+      - generic [ref=e46]: Tap a move to jump to it
+    - paragraph [ref=e48]: The engine is ready when you are. Analysis begins only on this completed-game screen.
+  - generic [ref=e49]:
+    - generic [ref=e50]:
+      - heading "Ask the coach" [level=2] [ref=e51]
+      - generic [ref=e52]: Engine-backed, human-readable
+    - paragraph [ref=e53]: Built-in notes stay on this device. Optional AI is off until enabled in the extension settings.
+    - generic [ref=e54]:
+      - generic [ref=e55]: Question about the finished game
+      - textbox "Question about the finished game" [ref=e56]:
+        - /placeholder: What was my plan with 18...Qh4?
+      - button "Ask about this finished game" [disabled] [ref=e57]
+  - group [ref=e58]:
+    - generic "Show the recorded PGN" [ref=e59] [cursor=pointer]
+  - generic [ref=e60]:
+    - generic [ref=e61]: Stockfish calculations stay local. No live hints were shown.
+    - link "Source & notices" [ref=e62] [cursor=pointer]:
+      - /url: https://github.com/mig2165/Chess_ai

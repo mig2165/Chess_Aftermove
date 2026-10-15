@@ -1,0 +1,4 @@
+node_modules/
+dist/
+vendor/stockfish/
+npm-debug.log*

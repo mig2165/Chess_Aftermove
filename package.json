@@ -1,0 +1,17 @@
+{
+  "name": "aftermove-chess-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "setup:engine": "node scripts/download-stockfish.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "chess.js": "^1.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
