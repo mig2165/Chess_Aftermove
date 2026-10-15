@@ -40,7 +40,10 @@ export function moveMark(category, checkmate = false) {
     case "blunder": return { icon: "‼", label: "blunder" };
     case "mistake": return { icon: "!", label: "mistake" };
     case "inaccuracy": return { icon: "?!", label: "inaccuracy" };
-    case "excellent": return { icon: "✦", label: "excellent" };
+    case "excellent":
+    case "great": return { icon: "✦", label: "great" };
+    case "brilliant": return { icon: "✧", label: "brilliant" };
+    case "miss": return { icon: "×", label: "miss" };
     case "best": return { icon: "✓", label: "best" };
     default: return { icon: "·", label: "good" };
   }

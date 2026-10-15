@@ -165,12 +165,19 @@ pgnFile.addEventListener("change", async () => {
 });
 
 $("#save-settings").addEventListener("click", async () => {
+  const key = $("#ai-key").value.trim();
   await chrome.storage.local.set({
-    aiEnabled: $("#ai-enabled").checked,
+    aiEnabled: $("#ai-enabled").checked && Boolean(key),
     aiModel: $("#ai-model").value.trim() || "gpt-4o-mini",
-    aiKey: $("#ai-key").value.trim()
+    aiKey: key
   });
-  $("#settings-status").textContent = "AI preference saved on this device.";
+  $("#settings-status").textContent = key && $("#ai-enabled").checked
+    ? "AI coach is enabled for completed-game questions."
+    : "Settings saved. Tick Enable OpenAI coaching and add an API key to use the AI coach.";
+});
+
+$("#ai-key").addEventListener("input", (event) => {
+  if (event.currentTarget.value.trim()) $("#ai-enabled").checked = true;
 });
 
 loadState().catch((error) => {

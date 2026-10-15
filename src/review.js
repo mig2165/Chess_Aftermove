@@ -29,6 +29,22 @@ function applyGate() {
   $("#coach-button").disabled = gameLocked || !pgnValid || !ready;
 }
 
+async function updateCoachSettingsStatus() {
+  const settings = await chrome.storage.local.get(["aiEnabled", "aiKey"]);
+  const status = $("#review-ai-status");
+  if (!settings.aiKey) {
+    status.textContent = "AI is off. Add an API key here, tick Enable AI coach, and save.";
+    return;
+  }
+  if (!settings.aiEnabled) {
+    status.textContent = "Your key is saved, but AI coaching is switched off. Tick Enable AI coach and save.";
+    return;
+  }
+  status.textContent = ready
+    ? "AI coach is ready. Ask a question below."
+    : "AI coach is saved. Run Stockfish analysis first, then ask a question.";
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.moveSounds) {
@@ -188,6 +204,7 @@ function uciLineToSan(fen, moves, limit = 5) {
     } catch {
       break;
     }
+    if (changes.aiEnabled || changes.aiKey || changes.aiModel) updateCoachSettingsStatus().catch(() => {});
   }
   return line;
 }
@@ -354,7 +371,7 @@ function renderSelectedMovePanel() {
   title.textContent = `${moveNumber(entry)} · ${mark.label}`;
   const label = document.createElement("span");
   label.className = "move-panel-category";
-  label.textContent = entry.checkmate ? "MATE" : mark.label;
+    label.textContent = entry.checkmate ? "MATE" : mark.label;
   heading.append(title, label);
   panel.append(heading);
 
@@ -702,6 +719,7 @@ async function analyzeGame() {
     renderAdvantage();
     renderSelectedMovePanel();
     setProgress("Review complete.", history.length, history.length);
+    updateCoachSettingsStatus().catch(() => {});
     $("#review-title").textContent = "Here’s what happened.";
     $("#review-summary").textContent = `${history.length} half-moves reviewed at depth 10 with Stockfish Lite. The engine did the counting; the coach did the translating.`;
     analyzeButton.textContent = "Analysis complete";
@@ -804,11 +822,15 @@ async function askCoach(question, focusEntry = null) {
 }
 
 async function initialize() {
-  const state = await chrome.storage.local.get(["reviewPgn", "recording", "moveSounds"]);
+  const state = await chrome.storage.local.get(["reviewPgn", "recording", "moveSounds", "aiEnabled", "aiKey", "aiModel"]);
   pgn = state.reviewPgn || "";
   gameLocked = Boolean(state.recording);
   moveSoundsEnabled = state.moveSounds !== false;
   $("#move-sounds").checked = moveSoundsEnabled;
+  $("#review-ai-enabled").checked = Boolean(state.aiEnabled);
+  $("#review-ai-key").value = state.aiKey || "";
+  $("#review-ai-model").value = state.aiModel || "gpt-4o-mini";
+  await updateCoachSettingsStatus();
   $("#move-sounds").disabled = gameLocked;
   $("#flip-board").disabled = gameLocked;
   $("#pgn-display").value = pgn;
@@ -890,6 +912,20 @@ $("#coach-form").addEventListener("submit", async (event) => {
   } finally {
     button.disabled = false;
   }
+});
+
+$("#review-ai-key").addEventListener("input", (event) => {
+  if (event.currentTarget.value.trim()) $("#review-ai-enabled").checked = true;
+});
+
+$("#review-save-ai").addEventListener("click", async () => {
+  const key = $("#review-ai-key").value.trim();
+  await chrome.storage.local.set({
+    aiEnabled: $("#review-ai-enabled").checked && Boolean(key),
+    aiKey: key,
+    aiModel: $("#review-ai-model").value.trim() || "gpt-4o-mini"
+  });
+  await updateCoachSettingsStatus();
 });
 
 initialize().catch((error) => {

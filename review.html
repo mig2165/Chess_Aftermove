@@ -34,6 +34,19 @@
           <span id="finding-count">Waiting for analysis</span>
         </div>
         <div id="move-summary" class="move-summary" aria-live="polite" hidden></div>
+        <section class="classification-key" aria-labelledby="classification-key-title">
+          <h3 id="classification-key-title">Move-rating key</h3>
+          <ul>
+            <li><b class="rating-bad">‼ Blunder</b><span>major evaluation drop</span></li>
+            <li><b class="rating-bad">! Mistake</b><span>clear loss of ground</span></li>
+            <li><b class="rating-bad">?! Inaccuracy</b><span>smaller meaningful slip</span></li>
+            <li><b>× Miss</b><span>missed tactical chance</span></li>
+            <li><b>· OK</b><span>holds the position</span></li>
+            <li><b class="rating-good">✦ Great</b><span>noticeably improves the position</span></li>
+            <li><b class="rating-good">✓ Best</b><span>Stockfish’s top move</span></li>
+            <li><b class="rating-brilliant">✧ Brilliant</b><span>exceptional sacrifice; not auto-rated yet</span></li>
+          </ul>
+        </section>
         <div class="replay-layout">
           <div class="board-column">
             <div id="chessboard" class="chessboard" role="grid" aria-label="Chess position after the selected move"></div>
@@ -70,18 +83,6 @@
           <div class="notation-column">
             <div class="notation-heading"><span>MOVE</span><span>WHITE</span><span>BLACK</span></div>
             <div id="move-list" class="move-list" aria-label="Game moves"></div>
-            <details class="move-key">
-              <summary>What the move symbols mean</summary>
-              <ul>
-                <li><b>‼ Blunder</b> — a major evaluation drop (about 3 pawns or more).</li>
-                <li><b>! Mistake</b> — a clear loss of ground (about 1.5–3 pawns).</li>
-                <li><b>?! Inaccuracy</b> — a smaller but meaningful slip (about 0.75–1.5 pawns).</li>
-                <li><b>· Good</b> — keeps the position roughly steady.</li>
-                <li><b>✦ Great</b> — improves the evaluation by about a pawn or more.</li>
-                <li><b>✓ Best</b> — matches Stockfish’s top move at this depth.</li>
-                <li><b>Brilliant</b> — not assigned yet; it needs deeper sacrifice analysis than this local review runs.</li>
-              </ul>
-            </details>
           </div>
         </div>
       </section>
@@ -102,6 +103,17 @@
           <span class="engine-note">Engine-backed, human-readable</span>
         </div>
         <p id="coach-privacy" class="privacy-note">Built-in notes stay on this device. Optional AI is off until enabled in the extension settings.</p>
+        <details class="review-ai-settings">
+          <summary>AI coach settings</summary>
+          <p>Use your OpenAI API key only for questions about completed games. It stays in this browser profile.</p>
+          <label class="checkbox-row"><input id="review-ai-enabled" type="checkbox"> <span>Enable AI coach</span></label>
+          <label class="field-label" for="review-ai-model">Model</label>
+          <input id="review-ai-model" class="settings-input" placeholder="gpt-4o-mini">
+          <label class="field-label" for="review-ai-key">API key</label>
+          <input id="review-ai-key" class="settings-input" type="password" autocomplete="off" placeholder="Paste your API key">
+          <button id="review-save-ai" class="review-save-ai" type="button">Save AI settings</button>
+          <p id="review-ai-status" class="settings-status" role="status"></p>
+        </details>
         <form id="coach-form">
           <label class="visually-hidden" for="coach-question">Question about the finished game</label>
           <textarea id="coach-question" rows="2" placeholder="Why was 18...Qh4 a mistake? What could my opponent do next?"></textarea>

@@ -59,7 +59,9 @@ test("arrow keys traverse plies without moving beyond either end", () => {
 test("every move quality has a distinct accessible icon and label", () => {
   assert.deepEqual(moveMark("good"), { icon: "·", label: "good" });
   assert.deepEqual(moveMark("best"), { icon: "✓", label: "best" });
-  assert.deepEqual(moveMark("excellent"), { icon: "✦", label: "excellent" });
+  assert.deepEqual(moveMark("excellent"), { icon: "✦", label: "great" });
+  assert.deepEqual(moveMark("miss"), { icon: "×", label: "miss" });
+  assert.deepEqual(moveMark("brilliant"), { icon: "✧", label: "brilliant" });
   assert.deepEqual(moveMark("inaccuracy"), { icon: "?!", label: "inaccuracy" });
   assert.deepEqual(moveMark("mistake"), { icon: "!", label: "mistake" });
   assert.deepEqual(moveMark("blunder"), { icon: "‼", label: "blunder" });
