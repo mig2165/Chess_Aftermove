@@ -30,6 +30,12 @@ for (const [entry, output] of [
 const engineDir = path.join(root, "vendor", "stockfish");
 try {
   await cp(engineDir, path.join(dist, "vendor", "stockfish"), { recursive: true });
+  // The Stockfish worker resolves its WebAssembly payload as stockfish.wasm
+  // when loaded directly by a Chrome extension worker.
+  await cp(
+    path.join(engineDir, "stockfish-19-lite-single.wasm"),
+    path.join(dist, "vendor", "stockfish", "stockfish.wasm")
+  );
 } catch (error) {
   if (error.code !== "ENOENT") throw error;
   console.warn("Stockfish is not installed yet. Run `npm run setup:engine` to enable engine reviews.");
