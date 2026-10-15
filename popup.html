@@ -30,6 +30,7 @@ FORM: Operate-mode extension popup, one narrow task surface; no dashboard cards 
         <h2 id="record-heading">Play first.<br><em>We’ll talk after.</em></h2>
         <p class="description">Record moves on this Chess.com tab. No hints, scores, or commentary while you play.</p>
         <button id="record-button" class="primary-button" type="button">Record this game</button>
+        <button id="finish-recording-button" class="secondary-button" type="button" hidden>Game ended — review captured moves</button>
         <button id="stop-recording-button" class="secondary-button stop-recording-button" type="button" hidden>Stop recording &amp; discard capture</button>
         <p id="record-error" class="error-copy" role="status" hidden></p>
         <p id="stop-recording-status" class="status-copy" role="status" aria-live="polite"></p>
@@ -66,8 +67,10 @@ FORM: Operate-mode extension popup, one narrow task surface; no dashboard cards 
         <p>Built-in move notes work without AI. If enabled, your key stays on this device; a finished PGN and engine findings are sent only when you ask a question.</p>
         <label class="checkbox-row">
           <input id="ai-enabled" type="checkbox">
-          <span>Enable OpenAI coaching after games</span>
+          <span>Enable AI coaching after games</span>
         </label>
+        <label class="field-label" for="ai-provider">Provider</label>
+        <select id="ai-provider" class="settings-input"><option value="openai">OpenAI API</option><option value="google">Google AI Studio (Gemini)</option></select>
         <label class="field-label" for="ai-model">Model</label>
         <input id="ai-model" class="settings-input" placeholder="gpt-4o-mini">
         <label class="field-label" for="ai-key">API key</label>

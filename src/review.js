@@ -769,7 +769,7 @@ function aiContext(focusEntry = null) {
 async function askCoach(question, focusEntry = null) {
   await ensureUnlocked();
   if (!ready) throw new Error("Run Stockfish analysis before asking the coach.");
-  const settings = await chrome.storage.local.get(["aiEnabled", "aiKey", "aiModel"]);
+  const settings = await chrome.storage.local.get(["aiEnabled", "aiKey", "aiModel", "aiProvider"]);
   if (!settings.aiEnabled || !settings.aiKey) {
     if (focusEntry) {
       if (focusEntry.category === "best") return `${moveNumber(focusEntry)} matches Stockfish’s top choice at depth 10. The engine confirms the move, but it can’t know the thought behind it.`;
@@ -791,25 +791,20 @@ async function askCoach(question, focusEntry = null) {
 
   $("#coach-privacy").textContent = "You asked for AI coaching: this completed PGN and its engine findings are being sent to OpenAI.";
   aiRequestController = new AbortController();
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const prompt = `Question: ${question}\n\nCompleted game and engine findings:\n${JSON.stringify(aiContext(focusEntry))}`;
+  const system = "You are a kind chess coach. This is a completed game only. For a weak move, name the concrete opponent reply from consequenceLine and explain the immediate threat; contrast it with bestLine. Do not invent lines not supplied.";
+  const google = settings.aiProvider === "google";
+  const model = settings.aiModel || (google ? "gemini-2.0-flash" : "gpt-4o-mini");
+  const response = await fetch(google
+    ? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(settings.aiKey)}`
+    : "https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${settings.aiKey}`
+      ...(google ? {} : { "Authorization": `Bearer ${settings.aiKey}` })
     },
     body: JSON.stringify({
-      model: settings.aiModel || "gpt-4o-mini",
-      temperature: 0.5,
-      messages: [
-        {
-          role: "system",
-      content: "You are a kind, lightly witty chess coach. This is a completed game; never suggest or reveal live-game moves. Ground every chess claim in the supplied PGN and Stockfish findings. If a selectedMove is supplied, answer about that exact move and compare it with the engine's choice. For a weak move, do not stop at an evaluation label: name the concrete opponent reply or sequence from consequenceLine, explain the immediate tactical or positional threat it creates, and then contrast it with bestLine. If no concrete line is supplied, say so rather than inventing one. Explain strategic ideas only when supported by the position; otherwise say that the engine establishes the evaluation, not a definitive reason. Do not assume which color the user played unless the PGN or question identifies it. Explain the player's likely plan as a possibility, not a fact. Keep the answer concise, constructive, and specific. Stockfish is an engine, not proof of the player's intent."
-        },
-        {
-          role: "user",
-          content: `Question: ${question}\n\nCompleted game and engine findings:\n${JSON.stringify(aiContext(focusEntry))}`
-        }
-      ]
+      ...(google ? { contents: [{ parts: [{ text: `${system}\n\n${prompt}` }] }], generationConfig: { temperature: 0.5 } } : { model, temperature: 0.5, messages: [{ role: "system", content: system }, { role: "user", content: prompt }] })
     }),
     signal: aiRequestController.signal
   });
@@ -818,7 +813,7 @@ async function askCoach(question, focusEntry = null) {
     throw new Error(details.error?.message || `OpenAI returned ${response.status}. Check the key and model in extension settings.`);
   }
   const data = await response.json();
-  return data.choices?.[0]?.message?.content || "The coach did not return a reply.";
+  return google ? (data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "The coach did not return a reply.") : (data.choices?.[0]?.message?.content || "The coach did not return a reply.");
 }
 
 async function initialize() {

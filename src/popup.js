@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const recordButton = $("#record-button");
 const stopRecordingButton = $("#stop-recording-button");
+const finishRecordingButton = $("#finish-recording-button");
 const recordState = $("#record-state");
 const recordError = $("#record-error");
 const lookupStatus = $("#lookup-status");
@@ -27,7 +28,7 @@ function isChessGamePage(url) {
 }
 
 async function loadState() {
-  const state = await chrome.storage.local.get(["recording", "recordingTabId", "aiEnabled", "aiModel", "aiKey"]);
+  const state = await chrome.storage.local.get(["recording", "recordingTabId", "aiEnabled", "aiModel", "aiKey", "aiProvider"]);
   const tab = await currentTab();
   const recordingHere = state.recording && tab?.id === state.recordingTabId;
   recordState.textContent = recordingHere ? "Recording silently. Reviews stay locked until the result." : state.recording ? "A game is being recorded in another tab." : "Ready when you are.";
@@ -35,6 +36,7 @@ async function loadState() {
   recordButton.classList.toggle("is-recording", Boolean(recordingHere));
   recordButton.disabled = Boolean(state.recording && !recordingHere);
   stopRecordingButton.hidden = !state.recording;
+  finishRecordingButton.hidden = !state.recording;
   stopRecordingButton.disabled = false;
   $("#lookup-form").querySelector("button").disabled = Boolean(state.recording);
   $("#pgn-button").disabled = Boolean(state.recording);
@@ -42,6 +44,7 @@ async function loadState() {
   if (state.recording) importStatus.textContent = "Finish the active recorded game before importing a PGN.";
   $("#ai-enabled").checked = Boolean(state.aiEnabled);
   $("#ai-model").value = state.aiModel || "gpt-4o-mini";
+  $("#ai-provider").value = state.aiProvider || "openai";
   $("#ai-key").value = state.aiKey || "";
 }
 
@@ -68,6 +71,12 @@ recordButton.addEventListener("click", async () => {
       : error.message;
     recordError.hidden = false;
   }
+});
+
+finishRecordingButton.addEventListener("click", async () => {
+  $("#stop-recording-status").textContent = "Reading the captured moves…";
+  const result = await chrome.runtime.sendMessage({ type: "COMPLETE_RECORDING" });
+  $("#stop-recording-status").textContent = result?.ok ? "Opening your captured game…" : (result?.error || "Could not open the captured game.");
 });
 
 stopRecordingButton.addEventListener("click", async () => {
@@ -168,6 +177,7 @@ $("#save-settings").addEventListener("click", async () => {
   const key = $("#ai-key").value.trim();
   await chrome.storage.local.set({
     aiEnabled: $("#ai-enabled").checked && Boolean(key),
+    aiProvider: $("#ai-provider").value,
     aiModel: $("#ai-model").value.trim() || "gpt-4o-mini",
     aiKey: key
   });

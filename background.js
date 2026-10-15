@@ -46,6 +46,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "COMPLETE_RECORDING") {
+    chrome.storage.local.get(["recording", "recordingTabId"]).then(async (state) => {
+      if (!state.recording || state.recordingTabId == null) throw new Error("There is no active recording to finish.");
+      const captured = await chrome.tabs.sendMessage(state.recordingTabId, { type: "EXPORT_CAPTURED_PGN" });
+      if (!captured?.ok) throw new Error(captured?.error || "Could not read the captured moves.");
+      await chrome.storage.local.set({ reviewPgn: captured.pgn, recording: false, recordingTabId: null, lastRecordedAt: Date.now() });
+      await chrome.tabs.create({ url: chrome.runtime.getURL("review.html") });
+      sendResponse({ ok: true });
+    }).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
   if (message?.type === "GAME_CAPTURED" && typeof message.pgn === "string") {
     chrome.storage.local.get(["recording", "recordingTabId"]).then((state) => {
       if (!state.recording || state.recordingTabId !== sender.tab?.id) {

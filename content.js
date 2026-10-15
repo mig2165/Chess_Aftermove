@@ -24,7 +24,17 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
 
   function moveNodes() {
     for (const selector of moveSelectorGroups) {
-      const nodes = [...document.querySelectorAll(selector)];
+      const roots = [document];
+      const seenRoots = new Set(roots);
+      for (let index = 0; index < roots.length; index += 1) {
+        for (const element of roots[index].querySelectorAll("*")) {
+          if (element.shadowRoot && !seenRoots.has(element.shadowRoot)) {
+            seenRoots.add(element.shadowRoot);
+            roots.push(element.shadowRoot);
+          }
+        }
+      }
+      const nodes = roots.flatMap((root) => [...root.querySelectorAll(selector)]);
       if (nodes.length) return nodes;
     }
     return [];
@@ -88,6 +98,11 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
     // move list, not a separate result modal. That marker is still definitive.
     return terminalResultFromTexts(visibleText(resultSelectors))
       || terminalResultFromTexts(visibleText(moveListSelectors));
+  }
+
+  function capturedPgnForManualReview() {
+    if (!captureMoves() || !game?.history().length) return null;
+    return makePgn("*");
   }
 
   function makePgn(result) {
@@ -172,6 +187,11 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
       captureComplete = false;
       lastMoveKey = "";
       sendResponse({ ok: true });
+      return false;
+    }
+    if (message?.type === "EXPORT_CAPTURED_PGN") {
+      const pgn = capturedPgnForManualReview();
+      sendResponse(pgn ? { ok: true, pgn } : { ok: false, error: "Aftermove still cannot read a complete legal move list on this page." });
       return false;
     }
   });
