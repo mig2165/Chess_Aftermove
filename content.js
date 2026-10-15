@@ -1,5 +1,6 @@
 import { Chess } from "chess.js";
 import { localGameEndResult } from "./src/game-end.js";
+import { replayMoveTexts } from "./src/move-capture.js";
 import { terminalResultFromTexts } from "./src/terminal-result.js";
 
 (() => {
@@ -7,11 +8,10 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
   window.__aftermoveObserverInstalled = true;
 
   const moveSelectorGroups = [
-    ".node[data-ply]",
-    ".main-line-ply",
-    ".move-text-component"
+    "[data-ply]",
+    "[data-san], [data-uci], [data-move]",
+    "wc-simple-move, .move-text-component, .main-line-ply, .node"
   ];
-  const figurines = { "♔": "K", "♕": "Q", "♖": "R", "♗": "B", "♘": "N", "♙": "", "♚": "K", "♛": "Q", "♜": "R", "♝": "B", "♞": "N", "♟": "" };
   let observer;
   let scanTimer;
   let game;
@@ -36,22 +36,9 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
         || source.getAttribute("data-uci")
         || source.textContent
         || source.getAttribute("aria-label");
-      if (value?.trim()) return value.trim().replace(/[♔♕♖♗♘♙♚♛♜♝♞♟]/g, (piece) => figurines[piece]);
+      if (value?.trim()) return value.trim();
     }
     return "";
-  }
-
-  function sanCandidates(value) {
-    const cleaned = value
-      .replace(/\b\d+\.(?:\.\.)?/g, " ")
-      .replace(/[!?]+/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    return cleaned.match(/(?:O-O-O|O-O|0-0-0|0-0|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?)/g) || [];
-  }
-
-  function normalizeSan(value) {
-    return value.replace(/0/g, "O").replace(/[+#]$/, "");
   }
 
   function captureMoves() {
@@ -66,41 +53,10 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
       index,
       ply: Number(node.getAttribute("data-ply") || node.closest("[data-ply]")?.getAttribute("data-ply"))
     })).sort((a, b) => Number.isFinite(a.ply) && Number.isFinite(b.ply) ? a.ply - b.ply : a.index - b.index);
-    const next = new Chess();
-    let captured = 0;
-
-    for (const { node } of ordered) {
-      const value = moveText(node);
-      const uci = value.match(/\b([a-h][1-8])([a-h][1-8])([qrbn])?\b/i);
-      if (uci) {
-        const from = uci[1].toLowerCase();
-        const to = uci[2].toLowerCase();
-        const promotion = uci[3]?.toLowerCase();
-        const move = next.moves({ verbose: true }).find((legal) =>
-          legal.from === from && legal.to === to && legal.promotion === promotion
-        );
-        if (move) {
-          next.move(move.san);
-          captured += 1;
-          continue;
-        }
-      }
-      const candidates = sanCandidates(value);
-      let matched = false;
-      for (const candidate of candidates) {
-        const san = next.moves().find((legal) => normalizeSan(legal) === normalizeSan(candidate));
-        if (!san) continue;
-        next.move(san);
-        captured += 1;
-        matched = true;
-        break;
-      }
-      if (!matched) break;
-    }
-
-    captureComplete = captured === ordered.length;
+    const replay = replayMoveTexts(ordered.map(({ node }) => moveText(node)));
+    captureComplete = replay.complete;
     if (captureComplete) {
-      game = next;
+      game = replay.game;
       lastMoveKey = game.history().join(" ");
     }
     return captureComplete;
@@ -112,10 +68,15 @@ import { terminalResultFromTexts } from "./src/terminal-result.js";
       ".game-over-modal",
       ".game-over-message",
       ".game-result",
+      ".game-over-component",
+      ".game-over",
       ".board-layout-game-result",
       '[data-cy="game-over"]',
+      '[data-cy="game-over-modal"]',
       '[data-testid="game-over"]',
-      '[data-testid="game-result"]'
+      '[data-testid="game-result"]',
+      '[data-testid*="game-over"]',
+      '[class*="game-over"]'
     ];
     const texts = [...document.querySelectorAll(selectors.join(","))]
       .filter((element) => element.getClientRects().length)

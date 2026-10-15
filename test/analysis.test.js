@@ -5,6 +5,7 @@ import { Chess } from "chess.js";
 import { evaluationAtPly, formatEvaluation, formatEvaluationSwing, whiteAdvantageShare } from "../src/advantage.js";
 import { adjacentPly, classify, classifyPlayedMove, moveLoss, moveMark, scoreFromInfo } from "../src/engine-logic.js";
 import { localGameEndResult } from "../src/game-end.js";
+import { moveTokens, replayMoveTexts } from "../src/move-capture.js";
 import { terminalResultFromTexts } from "../src/terminal-result.js";
 
 test("move loss measures evaluations from the mover's perspective", () => {
@@ -71,9 +72,26 @@ test("visible checkmate and result messages confirm completed games", () => {
   assert.equal(terminalResultFromTexts(["White resigned"]), "0-1");
   assert.equal(terminalResultFromTexts(["Black resigned"]), "1-0");
   assert.equal(terminalResultFromTexts(["You won on time"]), "*");
+  assert.equal(terminalResultFromTexts(["You lost by resignation"]), "*");
+  assert.equal(terminalResultFromTexts(["Game finished — opponent disconnected"]), "*");
   assert.equal(terminalResultFromTexts(["Draw by stalemate"]), "1/2-1/2");
   assert.equal(terminalResultFromTexts(["A comment mentions checkmate"]), null);
   assert.equal(terminalResultFromTexts(["Game in progress"]), null);
+});
+
+test("move capture replays individual, paired, figurine, and UCI move-list entries", () => {
+  assert.deepEqual(moveTokens("1. e4 e5 2. ♘f3 ♞c6").map((token) => token.san), ["e4", "e5", "Nf3", "Nc6"]);
+  const paired = replayMoveTexts(["1. e4 e5", "2. Nf3 Nc6", "3. Bb5 a6"]);
+  assert.equal(paired.complete, true);
+  assert.deepEqual(paired.moves, ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6"]);
+  const uci = replayMoveTexts(["e2e4 e7e5", "g1f3 b8c6"]);
+  assert.equal(uci.complete, true);
+  assert.equal(uci.game.fen().includes(" w KQkq - 2 3"), true);
+});
+
+test("move capture refuses move lists whose legal sequence breaks", () => {
+  const wrongOrder = replayMoveTexts(["1. e4 e5", "2. e4"]);
+  assert.equal(wrongOrder.complete, false);
 });
 
 test("local chess rules identify checkmate without relying on Chess.com result text", () => {

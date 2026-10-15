@@ -6,7 +6,9 @@ export function terminalResultFromTexts(texts) {
     if (/1\/2-1\/2|\bdraw\b|stalemate|insufficient material|threefold repetition|50.move rule|fifty.move rule/.test(text)) return "1/2-1/2";
     if (/white (resigned|resigns|flagged|ran out of time)/.test(text)) return "0-1";
     if (/black (resigned|resigns|flagged|ran out of time)/.test(text)) return "1-0";
-    if (/resigned|resignation|flagged|timeout|time out|on time|abandoned|disconnected/.test(text)) return "*";
+    // Chess.com often phrases a completed result relative to the signed-in player.
+    // The result is unknown to us, but '*' is a valid PGN result and unlocks review.
+    if (/resigned|resignation|flagged|timeout|time out|on time|abandoned|disconnected|\byou (won|lost|resigned)\b|\bgame (over|finished|ended)\b/.test(text)) return "*";
   }
   return null;
 }
