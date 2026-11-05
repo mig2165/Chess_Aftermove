@@ -28,10 +28,23 @@ function isChessGamePage(url) {
 }
 
 async function loadState() {
-  const state = await chrome.storage.local.get(["recording", "recordingTabId", "aiEnabled", "aiModel", "aiKey", "aiProvider"]);
+  const state = await chrome.storage.local.get([
+    "recording",
+    "recordingTabId",
+    "aiEnabled",
+    "aiModel",
+    "aiKey",
+    "aiProvider",
+    "username",
+    "detectedUsername"
+  ]);
   const tab = await currentTab();
   const recordingHere = state.recording && tab?.id === state.recordingTabId;
-  recordState.textContent = recordingHere ? "Recording silently. Reviews stay locked until the result." : state.recording ? "A game is being recorded in another tab." : "Ready when you are.";
+  recordState.textContent = recordingHere
+    ? "Recording silently. Reviews stay locked until the result."
+    : state.recording
+      ? "A game is being recorded in another tab."
+      : "Ready when you are.";
   recordButton.textContent = recordingHere ? "Check for game end" : state.recording ? "Recording locked" : "Record this game";
   recordButton.classList.toggle("is-recording", Boolean(recordingHere));
   recordButton.disabled = Boolean(state.recording && !recordingHere);
@@ -42,6 +55,12 @@ async function loadState() {
   $("#pgn-button").disabled = Boolean(state.recording);
   pgnFile.disabled = false;
   if (state.recording) importStatus.textContent = "Finish the active recorded game before importing a PGN.";
+
+  const preferredUser = state.username || state.detectedUsername;
+  if (preferredUser && !$("#username").value) {
+    $("#username").value = preferredUser;
+  }
+
   $("#ai-enabled").checked = Boolean(state.aiEnabled);
   $("#ai-model").value = state.aiModel || "gpt-4o-mini";
   $("#ai-provider").value = state.aiProvider || "openai";
@@ -54,8 +73,11 @@ recordButton.addEventListener("click", async () => {
     const tab = await currentTab();
     const state = await chrome.storage.local.get(["recording", "recordingTabId"]);
     if (state.recording && tab?.id === state.recordingTabId) {
+      recordState.textContent = "Checking for game end…";
       const response = await chrome.tabs.sendMessage(tab.id, { type: "CHECK_GAME_END" });
       if (!response?.ok) throw new Error(response?.error || "The game has not ended yet.");
+      recordState.textContent = "Game ended! Opening review…";
+      setTimeout(() => window.close(), 500);
       return;
     }
     if (state.recording) throw new Error("Another Chess.com game is being recorded. Finish it before starting a review.");
@@ -74,9 +96,17 @@ recordButton.addEventListener("click", async () => {
 });
 
 finishRecordingButton.addEventListener("click", async () => {
-  $("#stop-recording-status").textContent = "Reading the captured moves…";
-  const result = await chrome.runtime.sendMessage({ type: "COMPLETE_RECORDING" });
-  $("#stop-recording-status").textContent = result?.ok ? "Opening your captured game…" : (result?.error || "Could not open the captured game.");
+  $("#stop-recording-status").textContent = "Finalizing game review…";
+  finishRecordingButton.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "COMPLETE_RECORDING" });
+    if (!result?.ok) throw new Error(result?.error || "Could not complete the recording.");
+    $("#stop-recording-status").textContent = "Opening your captured game…";
+    setTimeout(() => window.close(), 500);
+  } catch (error) {
+    $("#stop-recording-status").textContent = error.message;
+    finishRecordingButton.disabled = false;
+  }
 });
 
 stopRecordingButton.addEventListener("click", async () => {
@@ -120,13 +150,27 @@ async function latestPublicGame(username) {
   throw new Error("No public game with a PGN was found for that player.");
 }
 
+$("#username").addEventListener("input", (event) => {
+  const user = event.currentTarget.value.trim();
+  if (user) chrome.storage.local.set({ username: user }).catch(() => {});
+});
+
+$("#username").addEventListener("change", (event) => {
+  const user = event.currentTarget.value.trim();
+  if (user) chrome.storage.local.set({ username: user }).catch(() => {});
+});
+
 $("#lookup-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button");
+  const user = $("#username").value.trim();
+  if (user) {
+    chrome.storage.local.set({ username: user }).catch(() => {});
+  }
   lookupStatus.textContent = "Checking Chess.com archives…";
   submit.disabled = true;
   try {
-    const pgn = await latestPublicGame($("#username").value);
+    const pgn = await latestPublicGame(user);
     await openReview(pgn);
     lookupStatus.textContent = "Latest public game found. Opening its review.";
   } catch (error) {

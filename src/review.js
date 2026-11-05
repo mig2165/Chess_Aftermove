@@ -1,7 +1,7 @@
 import { Chess } from "chess.js";
 import { evaluationAtPly, formatEvaluation, formatEvaluationSwing, whiteAdvantageShare } from "./advantage.js";
 import { boardPoint, displaySquare } from "./board-view.js";
-import { adjacentPly, classifyPlayedMove, moveMark, scoreFromInfo, whiteScore } from "./engine-logic.js";
+import { adjacentMistakePly, adjacentPly, classifyPlayedMove, dispatchParallelTasks, isBadMove, moveMark, playerAccuracy, scoreFromInfo, whiteScore } from "./engine-logic.js";
 
 const $ = (selector) => document.querySelector(selector);
 const analyzeButton = $("#analyze-button");
@@ -22,6 +22,8 @@ let aiRequestController;
 let moveSoundsEnabled = true;
 let soundContext;
 let bestMoveVisible = false;
+let bestMoveDismissed = false;
+let bestSequenceStep = 0;
 let boardFlipped = false;
 let whatIfGame = null;
 let whatIfStartPly = null;
@@ -35,6 +37,8 @@ let whatIfError = "";
 function applyGate() {
   analyzeButton.disabled = gameLocked || !pgnValid || ready || analysisRunning;
   $("#coach-button").disabled = gameLocked || !pgnValid || !ready;
+  const depthSelect = $("#engine-depth-select");
+  if (depthSelect) depthSelect.disabled = gameLocked || !pgnValid || ready || analysisRunning;
 }
 
 async function updateCoachSettingsStatus() {
@@ -188,6 +192,39 @@ class UciEngine {
   }
 }
 
+function getOptimalPoolSize() {
+  const cores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
+  return Math.min(4, Math.max(2, Math.floor(cores / 2)));
+}
+
+class EnginePool {
+  constructor(size = getOptimalPoolSize()) {
+    this.size = size;
+    this.engines = [];
+    this.stopped = false;
+  }
+
+  async start() {
+    this.engines = [];
+    const startPromises = [];
+    for (let i = 0; i < this.size; i++) {
+      const worker = new Worker(chrome.runtime.getURL("vendor/stockfish/stockfish-19-lite-single.js"));
+      const engine = new UciEngine(worker);
+      this.engines.push(engine);
+      startPromises.push(engine.start());
+    }
+    await Promise.all(startPromises);
+  }
+
+  stop() {
+    this.stopped = true;
+    for (const engine of this.engines) {
+      engine.stop();
+    }
+    this.engines = [];
+  }
+}
+
 function uciToSan(fen, move) {
   if (!move || move === "(none)" || move === "0000") return "";
   const board = new Chess(fen);
@@ -266,21 +303,115 @@ const pieceGlyph = {
 const pieceName = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
 let selectedPly = 0;
 
+function getBestContinuationSequence(entry, ply) {
+  if (!entry || !entry.bestMove) return null;
+  const startFen = positions[ply - 1] || new Chess().fen();
+  const testGame = new Chess(startFen);
+  const uciMoves = entry.bestPv || [];
+  const steps = [];
+
+  const movesToTry = uciMoves.length > 0 ? uciMoves : (entry.bestLine || []);
+
+  for (let i = 0; i < Math.min(3, movesToTry.length); i++) {
+    const rawMove = movesToTry[i];
+    let played = null;
+    try {
+      if (typeof rawMove === "string" && rawMove.length >= 4 && /^[a-h][1-8][a-h][1-8]/.test(rawMove)) {
+        played = testGame.move({
+          from: rawMove.slice(0, 2),
+          to: rawMove.slice(2, 4),
+          promotion: rawMove[4]?.toLowerCase()
+        });
+      } else {
+        played = testGame.move(rawMove);
+      }
+    } catch {
+      break;
+    }
+    if (!played) break;
+    steps.push({
+      stepNumber: i + 1,
+      san: played.san,
+      uci: `${played.from}${played.to}${played.promotion || ""}`,
+      from: played.from,
+      to: played.to,
+      fen: testGame.fen(),
+      color: played.color
+    });
+  }
+
+  if (steps.length === 0 && entry.bestSan) {
+    try {
+      const g = new Chess(startFen);
+      const played = g.move(entry.bestSan) || g.move({ from: entry.bestMove.slice(0, 2), to: entry.bestMove.slice(2, 4) });
+      if (played) {
+        steps.push({
+          stepNumber: 1,
+          san: played.san,
+          uci: `${played.from}${played.to}`,
+          from: played.from,
+          to: played.to,
+          fen: g.fen(),
+          color: played.color
+        });
+      }
+    } catch {}
+  }
+
+  return steps.length > 0 ? steps : null;
+}
+
 function renderBoard() {
   const boardElement = $("#chessboard");
   const selectedEntry = entries[selectedPly - 1];
   const freeplay = Boolean(whatIfGame);
-  const showBestPosition = !freeplay && bestMoveVisible && Boolean(selectedEntry?.bestMove);
-  const positionIndex = showBestPosition ? selectedPly - 1 : selectedPly;
-  const position = freeplay ? whatIfGame : new Chess(positions[positionIndex] || new Chess().fen());
+
+  const continuation = !freeplay && isBadMove(selectedEntry)
+    ? getBestContinuationSequence(selectedEntry, selectedPly)
+    : null;
+  const inContinuationPreview = Boolean(continuation && bestSequenceStep > 0);
+  const previewStepData = inContinuationPreview
+    ? continuation[Math.min(bestSequenceStep, continuation.length) - 1]
+    : null;
+
+  const position = inContinuationPreview
+    ? new Chess(previewStepData.fen)
+    : freeplay
+    ? whatIfGame
+    : new Chess(positions[selectedPly] || new Chess().fen());
+
   const board = position.board();
-  const playedMove = freeplay ? null : gameHistory[selectedPly - 1];
-  const bestMove = showBestPosition ? selectedEntry.bestMove : null;
+  const playedMove = freeplay || inContinuationPreview ? null : gameHistory[selectedPly - 1];
+
+  let arrowMove = null;
+  if (inContinuationPreview) {
+    arrowMove = previewStepData.uci;
+  } else if (!freeplay && selectedEntry?.bestMove) {
+    const bad = isBadMove(selectedEntry);
+    if ((bad && !bestMoveDismissed) || (!bad && bestMoveVisible)) {
+      arrowMove = selectedEntry.bestMove;
+    }
+  }
+
+  let originGhost = null;
+  if (arrowMove && !inContinuationPreview) {
+    const arrowFrom = arrowMove.slice(0, 2);
+    const pieceAtFrom = position.get(arrowFrom);
+    if (!pieceAtFrom) {
+      const prevPosition = new Chess(positions[selectedPly - 1] || new Chess().fen());
+      const orig = prevPosition.get(arrowFrom);
+      if (orig) {
+        originGhost = { square: arrowFrom, piece: orig };
+      }
+    }
+  }
+
   const legalMoves = freeplay && whatIfSelectedSquare
     ? position.moves({ square: whatIfSelectedSquare, verbose: true })
     : [];
   const legalSquares = new Set(legalMoves.map((move) => move.to));
   const cells = [];
+
   for (let row = 0; row < 8; row += 1) {
     for (let column = 0; column < 8; column += 1) {
       const displayed = displaySquare(row, column, boardFlipped);
@@ -288,6 +419,7 @@ function renderBoard() {
       const square = displayed.name;
       const cell = document.createElement("div");
       cell.className = `square ${(displayed.row + displayed.column) % 2 ? "dark" : "light"}`;
+
       if (freeplay) {
         cell.classList.add("freeplay");
         cell.tabIndex = 0;
@@ -304,41 +436,71 @@ function renderBoard() {
           }
         });
       }
-      const highlightedMove = showBestPosition ? null : playedMove;
-      if (highlightedMove?.from === square) cell.classList.add("last-from");
-      if (highlightedMove?.to === square) cell.classList.add("last-to");
+
+      if (playedMove?.from === square) cell.classList.add("last-from");
+      if (playedMove?.to === square) cell.classList.add("last-to");
+
+      if (arrowMove && arrowMove.slice(2, 4) === square) {
+        cell.classList.add("best-target-square");
+      }
+
       cell.setAttribute("role", "gridcell");
-      cell.setAttribute("aria-label", `${square}${piece ? `, ${piece.color === "w" ? "white" : "black"} ${pieceName[piece.type]}` : ""}${highlightedMove?.to === square ? ", move destination" : ""}`);
+      cell.setAttribute("aria-label", `${square}${piece ? `, ${piece.color === "w" ? "white" : "black"} ${pieceName[piece.type]}` : ""}${playedMove?.to === square ? ", move destination" : ""}`);
       cell.textContent = piece ? pieceGlyph[piece.color + piece.type] : "";
-      if (!showBestPosition && playedMove?.to === square && selectedEntry) {
+
+      if (originGhost && originGhost.square === square) {
+        const ghost = document.createElement("span");
+        ghost.className = "square-ghost-origin";
+        ghost.textContent = pieceGlyph[originGhost.piece.color + originGhost.piece.type];
+        ghost.setAttribute("aria-hidden", "true");
+        cell.append(ghost);
+      }
+
+      if (!inContinuationPreview && playedMove?.to === square && selectedEntry) {
         const badge = document.createElement("span");
         badge.className = "square-quality";
         badge.dataset.category = selectedEntry.category || "good";
         badge.setAttribute("aria-hidden", "true");
         badge.textContent = moveMark(selectedEntry.category, selectedEntry.checkmate).icon;
         cell.append(badge);
-      } else if (showBestPosition && bestMove.slice(2, 4) === square) {
+      } else if (inContinuationPreview && previewStepData && previewStepData.to === square) {
         const badge = document.createElement("span");
         badge.className = "square-quality best-destination";
         badge.setAttribute("aria-hidden", "true");
         badge.textContent = "✓";
         cell.append(badge);
       }
+
       cells.push(cell);
     }
   }
+
   boardElement.replaceChildren(...cells);
-  if (bestMove) appendBestArrow(boardElement, bestMove);
+  if (arrowMove) appendBestArrow(boardElement, arrowMove);
+
   boardElement.setAttribute("aria-label", `Chess position after the selected move, shown from ${boardFlipped ? "Black" : "White"}'s perspective`);
-  $("#previous-move").disabled = gameLocked || freeplay || selectedPly === 0;
-  $("#next-move").disabled = gameLocked || freeplay || selectedPly >= gameHistory.length;
+  $("#previous-move").disabled = gameLocked || freeplay || inContinuationPreview || selectedPly === 0;
+  $("#next-move").disabled = gameLocked || freeplay || inContinuationPreview || selectedPly >= gameHistory.length;
+
+  const prevMistakeBtn = $("#prev-mistake");
+  const nextMistakeBtn = $("#next-mistake");
+  if (prevMistakeBtn && nextMistakeBtn) {
+    if (gameLocked || freeplay || inContinuationPreview || entries.length === 0) {
+      prevMistakeBtn.disabled = true;
+      nextMistakeBtn.disabled = true;
+    } else {
+      prevMistakeBtn.disabled = adjacentMistakePly(selectedPly, "prev", entries) == null;
+      nextMistakeBtn.disabled = adjacentMistakePly(selectedPly, "next", entries) == null;
+    }
+  }
+
   $("#move-position").textContent = freeplay
     ? `Freeplay · ${whatIfGame.turn() === "w" ? "White" : "Black"} to move`
+    : inContinuationPreview
+    ? `Best continuation (${previewStepData.stepNumber} of ${continuation.length}) · ${previewStepData.san}`
     : selectedPly === 0
     ? "Start position"
-    : showBestPosition
-      ? `Best move for ${Math.ceil(selectedPly / 2)}${selectedPly % 2 ? "." : "..."} · before ${selectedEntry.actualSan}`
-      : `${Math.ceil(selectedPly / 2)}${selectedPly % 2 ? "." : "..."} ${gameHistory[selectedPly - 1].san} · ${selectedPly} of ${gameHistory.length}`;
+    : `${Math.ceil(selectedPly / 2)}${selectedPly % 2 ? "." : "..."} ${gameHistory[selectedPly - 1].san} · ${selectedPly} of ${gameHistory.length}`;
 }
 
 function appendBestArrow(boardElement, uciMove) {
@@ -351,18 +513,19 @@ function appendBestArrow(boardElement, uciMove) {
   const defs = document.createElementNS(svg.namespaceURI, "defs");
   const marker = document.createElementNS(svg.namespaceURI, "marker");
   marker.setAttribute("id", "best-arrowhead");
-  marker.setAttribute("markerWidth", "5");
-  marker.setAttribute("markerHeight", "5");
-  marker.setAttribute("refX", "4");
-  marker.setAttribute("refY", "2.5");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("refX", "4.5");
+  marker.setAttribute("refY", "3");
   marker.setAttribute("markerUnits", "userSpaceOnUse");
   marker.setAttribute("orient", "auto");
   const head = document.createElementNS(svg.namespaceURI, "path");
-  head.setAttribute("d", "M0,0 L5,2.5 L0,5 Z");
-  head.setAttribute("fill", "#18230f");
+  head.setAttribute("d", "M0,0.5 L5.5,3 L0,5.5 Z");
+  head.setAttribute("class", "arrow-head");
   marker.append(head);
   defs.append(marker);
   const line = document.createElementNS(svg.namespaceURI, "path");
+  line.setAttribute("class", "arrow-line");
   line.setAttribute("d", `M ${boardPoint(from, boardFlipped)} L ${boardPoint(to, boardFlipped)}`);
   line.setAttribute("marker-end", "url(#best-arrowhead)");
   svg.append(defs, line);
@@ -377,6 +540,8 @@ function jumpToPly(ply) {
     button.setAttribute("aria-current", Number(button.dataset.ply) === selectedPly ? "true" : "false");
   }
   bestMoveVisible = false;
+  bestMoveDismissed = false;
+  bestSequenceStep = 0;
   renderBoard();
   renderAdvantage();
   renderSelectedMovePanel();
@@ -406,7 +571,7 @@ function renderSelectedMovePanel() {
   title.textContent = `${moveNumber(entry)} · ${mark.label}`;
   const label = document.createElement("span");
   label.className = "move-panel-category";
-    label.textContent = entry.checkmate ? "MATE" : mark.label;
+  label.textContent = entry.checkmate ? "MATE" : mark.label;
   heading.append(title, label);
   panel.append(heading);
 
@@ -415,21 +580,157 @@ function renderSelectedMovePanel() {
   reason.textContent = entry.checkmate ? humanNote(entry) : bestMoveReason(entry);
   panel.append(reason);
 
+  const badMove = isBadMove(entry);
+  const continuation = badMove ? getBestContinuationSequence(entry, selectedPly) : null;
+
+  if (continuation && continuation.length > 0) {
+    const continuationCard = document.createElement("div");
+    continuationCard.className = "best-line-card";
+
+    const cardHeader = document.createElement("div");
+    cardHeader.className = "best-line-header";
+    cardHeader.innerHTML = `
+      <span class="best-line-badge">BEST CONTINUATION</span>
+      <span class="best-line-note">${continuation.length} moves ahead</span>
+    `;
+    continuationCard.append(cardHeader);
+
+    const stepsContainer = document.createElement("div");
+    stepsContainer.className = "best-line-steps";
+
+    continuation.forEach((step, idx) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = `best-line-chip ${bestSequenceStep === step.stepNumber ? "is-active" : ""}`;
+      const moveNum = Math.ceil((selectedPly + idx) / 2);
+      const isWhite = step.color === "w";
+      const prefix = isWhite ? `${moveNum}. ` : idx === 0 ? `${moveNum}... ` : "";
+      chip.textContent = `${prefix}${step.san}`;
+      chip.title = `Click to preview step ${step.stepNumber}: ${step.san}`;
+      chip.addEventListener("click", () => {
+        bestSequenceStep = bestSequenceStep === step.stepNumber ? 0 : step.stepNumber;
+        renderBoard();
+        renderSelectedMovePanel();
+      });
+      stepsContainer.append(chip);
+    });
+    continuationCard.append(stepsContainer);
+
+    const actionsContainer = document.createElement("div");
+    actionsContainer.className = "best-line-actions";
+
+    if (bestSequenceStep === 0) {
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.className = "best-line-btn-primary";
+      previewBtn.innerHTML = `Preview 3-move sequence ▶`;
+      previewBtn.addEventListener("click", () => {
+        bestSequenceStep = 1;
+        renderBoard();
+        renderSelectedMovePanel();
+      });
+      actionsContainer.append(previewBtn);
+    } else {
+      const prevBtn = document.createElement("button");
+      prevBtn.type = "button";
+      prevBtn.className = "best-line-nav-btn";
+      prevBtn.setAttribute("aria-label", "Previous move in continuation");
+      prevBtn.textContent = "◀";
+      prevBtn.disabled = bestSequenceStep <= 1;
+      prevBtn.addEventListener("click", () => {
+        if (bestSequenceStep > 1) {
+          bestSequenceStep -= 1;
+          renderBoard();
+          renderSelectedMovePanel();
+        }
+      });
+      actionsContainer.append(prevBtn);
+
+      const stepIndicator = document.createElement("span");
+      stepIndicator.style.fontSize = "11px";
+      stepIndicator.style.fontWeight = "700";
+      stepIndicator.style.color = "#4ade80";
+      stepIndicator.textContent = `Step ${bestSequenceStep} of ${continuation.length}`;
+      actionsContainer.append(stepIndicator);
+
+      const nextBtn = document.createElement("button");
+      nextBtn.type = "button";
+      nextBtn.className = "best-line-nav-btn";
+      nextBtn.setAttribute("aria-label", "Next move in continuation");
+      nextBtn.textContent = "▶";
+      nextBtn.disabled = bestSequenceStep >= continuation.length;
+      nextBtn.addEventListener("click", () => {
+        if (bestSequenceStep < continuation.length) {
+          bestSequenceStep += 1;
+          renderBoard();
+          renderSelectedMovePanel();
+        }
+      });
+      actionsContainer.append(nextBtn);
+
+      const exitBtn = document.createElement("button");
+      exitBtn.type = "button";
+      exitBtn.className = "best-line-exit-btn";
+      exitBtn.textContent = "Exit preview ✕";
+      exitBtn.addEventListener("click", () => {
+        bestSequenceStep = 0;
+        renderBoard();
+        renderSelectedMovePanel();
+      });
+      actionsContainer.append(exitBtn);
+    }
+
+    continuationCard.append(actionsContainer);
+    panel.append(continuationCard);
+  }
+
   const actions = document.createElement("div");
   actions.className = "move-panel-actions";
-  const bestButton = document.createElement("button");
-  bestButton.className = "move-panel-best";
-  bestButton.type = "button";
-  bestButton.disabled = !entry.bestMove || entry.checkmate;
-  bestButton.textContent = bestMoveVisible ? "Hide best move" : entry.bestSan ? `Show best: ${entry.bestSan}` : "Best move unavailable";
-  bestButton.addEventListener("click", () => {
-    bestMoveVisible = !bestMoveVisible;
-    renderBoard();
-    renderSelectedMovePanel();
-  });
-  actions.append(bestButton);
 
-  actions.append(createExploreButton());
+  if (entry.bestMove && !entry.checkmate) {
+    const bestButton = document.createElement("button");
+    bestButton.className = "move-panel-best";
+    bestButton.type = "button";
+    if (badMove) {
+      bestButton.textContent = bestMoveDismissed
+        ? `Show best arrow: ${entry.bestSan || ""}`
+        : `Hide best arrow`;
+      bestButton.addEventListener("click", () => {
+        bestMoveDismissed = !bestMoveDismissed;
+        renderBoard();
+        renderSelectedMovePanel();
+      });
+    } else {
+      bestButton.textContent = bestMoveVisible
+        ? "Hide best move"
+        : entry.bestSan
+        ? `Show best: ${entry.bestSan}`
+        : "Best move unavailable";
+      bestButton.addEventListener("click", () => {
+        bestMoveVisible = !bestMoveVisible;
+        renderBoard();
+        renderSelectedMovePanel();
+      });
+    }
+    actions.append(bestButton);
+  }
+
+  const exploreButton = document.createElement("button");
+  exploreButton.className = "move-panel-explore";
+  exploreButton.type = "button";
+  exploreButton.disabled = gameLocked || !pgnValid;
+  exploreButton.textContent = bestSequenceStep > 0
+    ? `Explore from continuation step ${bestSequenceStep}`
+    : "Explore alternatives from here";
+  exploreButton.addEventListener("click", () => {
+    if (bestSequenceStep > 0 && continuation) {
+      const stepData = continuation[bestSequenceStep - 1];
+      startWhatIf(stepData.fen);
+    } else {
+      startWhatIf();
+    }
+  });
+  actions.append(exploreButton);
 
   const coachButton = document.createElement("button");
   coachButton.className = "move-panel-coach";
@@ -458,21 +759,23 @@ function createExploreButton() {
   button.type = "button";
   button.disabled = gameLocked || !pgnValid;
   button.textContent = "Explore alternatives from here";
-  button.addEventListener("click", startWhatIf);
+  button.addEventListener("click", () => startWhatIf());
   return button;
 }
 
-function startWhatIf() {
+function startWhatIf(customFen) {
   if (gameLocked || !pgnValid) return;
-  whatIfGame = new Chess(positions[selectedPly] || new Chess().fen());
+  whatIfGame = new Chess(customFen || positions[selectedPly] || new Chess().fen());
   whatIfStartPly = selectedPly;
   whatIfSelectedSquare = "";
   whatIfBaseline = null;
   whatIfLastMove = null;
   whatIfError = "";
   bestMoveVisible = false;
+  bestSequenceStep = 0;
   renderBoard();
   renderWhatIfPanel();
+  renderAdvantage();
   analyzeWhatIfPosition();
 }
 
@@ -487,6 +790,8 @@ function exitWhatIf() {
   whatIfRunning = false;
   const panel = $("#what-if-panel");
   if (panel) panel.hidden = true;
+  $("#selected-move-panel").hidden = false;
+  renderAdvantage();
 }
 
 function renderWhatIfPanel() {
@@ -544,12 +849,17 @@ function handleWhatIfSquare(square) {
     renderBoard();
     return;
   }
-  const before = whatIfBaseline;
+  const beforeScore = whatIfBaseline?.result?.score || evaluationAtPly(entries, whatIfStartPly)?.score;
+  let before = whatIfBaseline;
+  if (!before && beforeScore) {
+    before = { fen: positions[whatIfStartPly] || whatIfGame.fen(), result: { score: beforeScore, bestmove: "" } };
+  }
   const played = whatIfGame.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
   whatIfSelectedSquare = "";
-  whatIfLastMove = { move: played, rating: null };
+  whatIfLastMove = { move: played, rating: null, previousScore: beforeScore };
   renderBoard();
   renderWhatIfPanel();
+  renderAdvantage();
   analyzeWhatIfPosition(before, played);
 }
 
@@ -560,6 +870,7 @@ async function analyzeWhatIfPosition(previous = null, played = null) {
   whatIfError = "";
   whatIfRunning = true;
   renderWhatIfPanel();
+  renderAdvantage();
   let engine;
   try {
     engine = new UciEngine(new Worker(chrome.runtime.getURL("vendor/stockfish/stockfish-19-lite-single.js")));
@@ -570,11 +881,17 @@ async function analyzeWhatIfPosition(previous = null, played = null) {
       ? classifyPlayedMove({ beforeScore: previous.result.score, afterScore: result.score, turn: played.color, actualSan: played.san, bestSan: uciToSan(previous.fen, previous.result.bestmove), checkmatedOpponent: whatIfGame.isCheckmate() })
       : null;
     whatIfBaseline = { fen, result };
-    if (played) whatIfLastMove = { move: played, rating };
+    if (played) {
+      whatIfLastMove = {
+        move: played,
+        rating,
+        previousScore: previous?.result?.score || whatIfLastMove?.previousScore
+      };
+    }
   } catch (error) {
     if (request === whatIfRequest) {
       whatIfBaseline = null;
-      whatIfLastMove = { move: played || whatIfLastMove?.move, rating: null };
+      whatIfLastMove = { move: played || whatIfLastMove?.move, rating: null, previousScore: previous?.result?.score };
       whatIfError = error.message;
     }
   } finally {
@@ -583,6 +900,7 @@ async function analyzeWhatIfPosition(previous = null, played = null) {
       whatIfRunning = false;
       renderBoard();
       renderWhatIfPanel();
+      renderAdvantage();
     }
   }
 }
@@ -706,35 +1024,84 @@ function renderFindings(analysis) {
 
 function renderMoveSummary(analysis) {
   const summary = $("#move-summary");
-  const counts = Object.fromEntries(["brilliant", "best", "excellent", "good", "inaccuracy", "mistake", "blunder"].map((category) => [
-    category,
-    analysis.filter((entry) => entry.category === category).length
-  ]));
-  const missed = counts.inaccuracy + counts.mistake + counts.blunder;
-  const metrics = [
-    ["Brilliant", "N/A", "not-assessed"],
-    ["Great", counts.excellent, "excellent"],
-    ["Best", counts.best, "best"],
-    ["Good", counts.good, "good"],
-    ["Inaccuracies", counts.inaccuracy, "inaccuracy"],
-    ["Mistakes", counts.mistake, "mistake"],
-    ["Blunders", counts.blunder, "blunder"],
-    ["Misses", missed, "miss"]
-  ];
-  summary.replaceChildren();
-  for (const [label, value, category] of metrics) {
-    const item = document.createElement("span");
-    item.className = "summary-stat";
-    item.dataset.category = category;
-    const count = document.createElement("strong");
-    count.textContent = String(value);
-    item.append(count, document.createTextNode(` ${label}`));
-    summary.append(item);
+
+  const whiteAcc = playerAccuracy(analysis, "w");
+  const blackAcc = playerAccuracy(analysis, "b");
+
+  if (whiteAcc != null) {
+    const el = $("#white-acc-val");
+    if (el) el.textContent = `${whiteAcc}%`;
+    const badge = $("#white-accuracy-badge");
+    if (badge) badge.hidden = false;
   }
+  if (blackAcc != null) {
+    const el = $("#black-acc-val");
+    if (el) el.textContent = `${blackAcc}%`;
+    const badge = $("#black-accuracy-badge");
+    if (badge) badge.hidden = false;
+  }
+
+  const whiteMoves = analysis.filter((entry) => entry.turn === "w");
+  const blackMoves = analysis.filter((entry) => entry.turn === "b");
+
+  const countCat = (moves, cat) => moves.filter((e) => e.category === cat).length;
+  const countMissed = (moves) => moves.filter((e) => ["inaccuracy", "mistake", "blunder"].includes(e.category)).length;
+
+  const rows = [
+    { label: "Brilliant", icon: "✧", cat: "brilliant", white: "—", black: "—" },
+    { label: "Great", icon: "✦", cat: "excellent", white: countCat(whiteMoves, "excellent"), black: countCat(blackMoves, "excellent") },
+    { label: "Best", icon: "✓", cat: "best", white: countCat(whiteMoves, "best"), black: countCat(blackMoves, "best") },
+    { label: "Good", icon: "·", cat: "good", white: countCat(whiteMoves, "good"), black: countCat(blackMoves, "good") },
+    { label: "Inaccuracies", icon: "?!", cat: "inaccuracy", white: countCat(whiteMoves, "inaccuracy"), black: countCat(blackMoves, "inaccuracy") },
+    { label: "Mistakes", icon: "!", cat: "mistake", white: countCat(whiteMoves, "mistake"), black: countCat(blackMoves, "mistake") },
+    { label: "Blunders", icon: "‼", cat: "blunder", white: countCat(whiteMoves, "blunder"), black: countCat(blackMoves, "blunder") },
+    { label: "Misses", icon: "×", cat: "miss", white: countMissed(whiteMoves), black: countMissed(blackMoves) }
+  ];
+
+  const table = document.createElement("div");
+  table.className = "breakdown-table";
+  table.setAttribute("role", "table");
+  table.setAttribute("aria-label", "Move classification breakdown for White and Black");
+
+  const header = document.createElement("div");
+  header.className = "breakdown-row breakdown-header";
+  header.setAttribute("role", "row");
+  header.innerHTML = `
+    <span class="col-side col-white" role="columnheader">WHITE ${whiteAcc != null ? `<strong>${whiteAcc}%</strong>` : ""}</span>
+    <span class="col-category" role="columnheader">MOVE QUALITY</span>
+    <span class="col-side col-black" role="columnheader">BLACK ${blackAcc != null ? `<strong>${blackAcc}%</strong>` : ""}</span>
+  `;
+  table.append(header);
+
+  for (const row of rows) {
+    const tr = document.createElement("div");
+    tr.className = `breakdown-row row-${row.cat}`;
+    tr.setAttribute("role", "row");
+
+    const wCol = document.createElement("span");
+    wCol.className = "col-side col-white-val";
+    wCol.setAttribute("role", "cell");
+    wCol.textContent = String(row.white);
+
+    const catCol = document.createElement("span");
+    catCol.className = "col-category-val";
+    catCol.setAttribute("role", "cell");
+    catCol.innerHTML = `<span class="cat-icon cat-${row.cat}">${row.icon}</span> <span class="cat-label">${row.label}</span>`;
+
+    const bCol = document.createElement("span");
+    bCol.className = "col-side col-black-val";
+    bCol.setAttribute("role", "cell");
+    bCol.textContent = String(row.black);
+
+    tr.append(wCol, catCol, bCol);
+    table.append(tr);
+  }
+
   const note = document.createElement("p");
   note.className = "summary-note";
-  note.textContent = "Misses = inaccuracies + mistakes + blunders. Brilliant moves need deeper sacrifice analysis, so they aren’t guessed here.";
-  summary.append(note);
+  note.textContent = "Accuracy is computed on standard logarithmic centipawn loss (CAPS). Misses include inaccuracies, mistakes, and blunders.";
+
+  summary.replaceChildren(table, note);
   summary.hidden = false;
 }
 
@@ -743,23 +1110,98 @@ function renderAdvantage() {
   panel.hidden = gameLocked;
   if (gameLocked) return;
 
+  const label = $("#advantage-evaluation");
+  const track = $("#advantage-track");
+  const fill = $("#advantage-white");
+  const swing = $("#advantage-swing");
+
+  // If in free play mode
+  if (whatIfGame) {
+    track.dataset.state = "ready";
+
+    if (whatIfGame.isCheckmate()) {
+      const winner = whatIfGame.turn() === "w" ? "Black" : "White";
+      label.textContent = `${winner} wins · checkmate`;
+      fill.style.transform = `scaleX(${winner === "White" ? 0.97 : 0.03})`;
+      fill.dataset.leader = winner.toLowerCase();
+      track.setAttribute("aria-label", `${winner} wins by checkmate`);
+      swing.textContent = `${whatIfLastMove?.move?.san || "Move"} delivers checkmate.`;
+      return;
+    }
+
+    if (whatIfGame.isDraw()) {
+      label.textContent = "Draw · 0.0";
+      fill.style.transform = "scaleX(0.5)";
+      fill.dataset.leader = "even";
+      track.setAttribute("aria-label", "Drawn position");
+      swing.textContent = "Position is a draw.";
+      return;
+    }
+
+    const currentScore = whatIfBaseline?.result?.score;
+    if (currentScore) {
+      const score = whiteScore(currentScore, currentScore.turn);
+      const share = whiteAdvantageShare(currentScore);
+      const evaluation = formatEvaluation(currentScore);
+      label.textContent = evaluation;
+      fill.style.transform = `scaleX(${share})`;
+      fill.dataset.leader = score > 0 ? "white" : score < 0 ? "black" : "even";
+      track.setAttribute("aria-label", `${evaluation}. White advantage scale at ${Math.round(share * 100)} percent.`);
+
+      if (whatIfLastMove?.previousScore) {
+        const moveSwing = (currentScore.type !== "mate" && whatIfLastMove.previousScore.type !== "mate")
+          ? whiteScore(currentScore, currentScore.turn) - whiteScore(whatIfLastMove.previousScore, whatIfLastMove.previousScore.turn)
+          : null;
+        swing.textContent = formatEvaluationSwing(moveSwing, whatIfLastMove.previousScore, currentScore);
+      } else {
+        swing.textContent = `Alternate line · ${whatIfGame.history().length} move${whatIfGame.history().length === 1 ? "" : "s"} explored.`;
+      }
+      return;
+    }
+
+    if (whatIfRunning) {
+      label.textContent = "Stockfish thinking…";
+      track.dataset.state = "waiting";
+      swing.textContent = whatIfLastMove?.move?.san
+        ? `Evaluating ${whatIfLastMove.move.san} with Stockfish…`
+        : "Evaluating alternate position…";
+      return;
+    }
+
+    const baseEntry = evaluationAtPly(entries, whatIfStartPly);
+    if (baseEntry?.score) {
+      const score = whiteScore(baseEntry.score, baseEntry.score.turn);
+      const share = whiteAdvantageShare(baseEntry.score);
+      const evaluation = formatEvaluation(baseEntry.score);
+      label.textContent = evaluation;
+      fill.style.transform = `scaleX(${share})`;
+      fill.dataset.leader = score > 0 ? "white" : score < 0 ? "black" : "even";
+      track.setAttribute("aria-label", `${evaluation}. White advantage scale at ${Math.round(share * 100)} percent.`);
+      swing.textContent = "Exploring alternative moves from this position.";
+      return;
+    }
+
+    label.textContent = "Not analyzed yet";
+    track.dataset.state = "waiting";
+    fill.style.transform = "scaleX(0.5)";
+    fill.dataset.leader = "even";
+    swing.textContent = "Make a move on the board to see Stockfish's evaluation.";
+    return;
+  }
+
+  // Normal mainline review mode:
   const position = evaluationAtPly(entries, selectedPly);
   if (!ready || !position) {
-    $("#advantage-evaluation").textContent = "Not analyzed yet";
-    const track = $("#advantage-track");
+    label.textContent = "Not analyzed yet";
     track.dataset.state = "waiting";
     track.setAttribute("aria-label", "Position advantage is not yet available.");
-    $("#advantage-white").style.transform = "scaleX(0)";
-    $("#advantage-swing").textContent = pgnValid
+    fill.style.transform = "scaleX(0)";
+    swing.textContent = pgnValid
       ? "Select Analyze with Stockfish to see the evaluation and move-by-move change."
       : "Load a completed PGN, then select Analyze with Stockfish to see the evaluation and move-by-move change.";
     return;
   }
 
-  const label = $("#advantage-evaluation");
-  const track = $("#advantage-track");
-  const fill = $("#advantage-white");
-  const swing = $("#advantage-swing");
   track.dataset.state = "ready";
 
   if (position.checkmate) {
@@ -802,8 +1244,13 @@ async function analyzeGame() {
   analyzeButton.setAttribute("aria-busy", "true");
   applyGate();
   progressRegion.hidden = false;
-  setProgress("Loading the local engine…", 0, 0);
-  let engine;
+  setProgress("Loading the local engine pool…", 0, 0);
+
+  const depth = Number($("#engine-depth-select")?.value) || 12;
+  await chrome.storage.local.set({ analysisDepth: depth }).catch(() => {});
+
+  const poolSize = getOptimalPoolSize();
+  let pool;
   try {
     const parsed = new Chess();
     parsed.loadPgn(pgn);
@@ -811,22 +1258,50 @@ async function analyzeGame() {
     if (!history.length) throw new Error("This PGN contains no playable moves.");
     if (history.length > 250) throw new Error("This game is unusually long. Import a single completed game (250 plies or fewer).");
     await ensureUnlocked();
-    engine = new UciEngine(new Worker(chrome.runtime.getURL("vendor/stockfish/stockfish-19-lite-single.js")));
-    activeEngine = engine;
-    await engine.start();
 
-    const replay = new Chess();
-    let before = await engine.analyze(replay.fen());
+    setProgress(`Starting ${poolSize} parallel engine workers…`, 0, 1);
+    pool = new EnginePool(poolSize);
+    activeEngine = pool;
+    await pool.start();
+
+    const replayPre = new Chess();
+    const fensToAnalyze = [replayPre.fen()];
+    let checkmatePly = null;
+    for (let i = 0; i < history.length; i++) {
+      replayPre.move({ from: history[i].from, to: history[i].to, promotion: history[i].promotion });
+      if (replayPre.isCheckmate()) {
+        checkmatePly = i + 1;
+        break;
+      }
+      fensToAnalyze.push(replayPre.fen());
+    }
+
+    setProgress(`Analyzing moves (depth ${depth}) across ${poolSize} workers…`, 0, fensToAnalyze.length);
+
+    const evaluations = await dispatchParallelTasks(
+      fensToAnalyze,
+      pool.engines,
+      async (workerEngine, fen) => {
+        await ensureUnlocked();
+        return workerEngine.analyze(fen, depth);
+      },
+      (done, total) => {
+        setProgress(`Evaluated ${done} of ${total} positions (depth ${depth})…`, done, total);
+      }
+    );
+
+    const replayGame = new Chess();
     const result = [];
-    for (let index = 0; index < history.length; index += 1) {
-      await ensureUnlocked();
+    const limit = checkmatePly !== null ? checkmatePly : history.length;
+    for (let index = 0; index < limit; index += 1) {
       const playedMove = history[index];
-      const fen = replay.fen();
-      const turn = replay.turn();
+      const fen = replayGame.fen();
+      const turn = replayGame.turn();
+      const before = evaluations[index];
       const bestSan = uciToSan(fen, before.bestmove);
       const bestLine = uciLineToSan(fen, before.pv);
-      const actual = replay.move({ from: playedMove.from, to: playedMove.to, promotion: playedMove.promotion });
-      const checkmate = replay.isCheckmate();
+      const actual = replayGame.move({ from: playedMove.from, to: playedMove.to, promotion: playedMove.promotion });
+      const checkmate = replayGame.isCheckmate();
       if (checkmate) {
         const classification = classifyPlayedMove({
           beforeScore: before.score,
@@ -842,16 +1317,16 @@ async function analyzeGame() {
           bestSan,
           bestMove: before.bestmove,
           bestLine,
+          bestPv: before.pv || [],
           consequenceLine: [],
           ...classification,
           checkmate: true,
           beforeScore: before.score,
           afterScore: null
         });
-        setProgress(`Reading move ${index + 1} of ${history.length}…`, index + 1, history.length);
         break;
       }
-      const after = await engine.analyze(replay.fen());
+      const after = evaluations[index + 1];
       const { loss, category } = classifyPlayedMove({
         beforeScore: before.score,
         afterScore: after.score,
@@ -866,16 +1341,16 @@ async function analyzeGame() {
         bestSan,
         bestMove: before.bestmove,
         bestLine,
-        consequenceLine: uciLineToSan(replay.fen(), after.pv),
+        bestPv: before.pv || [],
+        consequenceLine: uciLineToSan(replayGame.fen(), after.pv),
         loss: Math.round(loss),
         category,
         checkmate: false,
         beforeScore: before.score,
         afterScore: after.score
       });
-      before = after;
-      setProgress(`Reading move ${index + 1} of ${history.length}…`, index + 1, history.length);
     }
+
     entries.splice(0, entries.length, ...result);
     gameHistory = history.slice(0, result.length);
     positions.splice(0, positions.length, new Chess().fen());
@@ -890,10 +1365,10 @@ async function analyzeGame() {
     renderMoveSummary(result);
     renderAdvantage();
     renderSelectedMovePanel();
-    setProgress("Review complete.", history.length, history.length);
+    setProgress("Review complete.", result.length, result.length);
     updateCoachSettingsStatus().catch(() => {});
     $("#review-title").textContent = "Here’s what happened.";
-    $("#review-summary").textContent = `${history.length} half-moves reviewed at depth 10 with Stockfish Lite. The engine did the counting; the coach did the translating.`;
+    $("#review-summary").textContent = `${result.length} half-moves reviewed at depth ${depth} across ${poolSize} parallel engine workers.`;
     analyzeButton.textContent = "Analysis complete";
   } catch (error) {
     if (!gameLocked) {
@@ -904,8 +1379,8 @@ async function analyzeGame() {
       analyzeButton.textContent = "Try analysis again";
     }
   } finally {
-    engine?.stop();
-    if (activeEngine === engine) activeEngine = null;
+    pool?.stop();
+    if (activeEngine === pool) activeEngine = null;
     analysisRunning = false;
     analyzeButton.classList.remove("is-loading");
     analyzeButton.removeAttribute("aria-busy");
@@ -988,8 +1463,60 @@ async function askCoach(question, focusEntry = null) {
   return google ? (data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "The coach did not return a reply.") : (data.choices?.[0]?.message?.content || "The coach did not return a reply.");
 }
 
+function extractPgnHeaders(pgnText) {
+  const headers = {};
+  const regex = /\[(\w+)\s+"([^"]*)"\]/g;
+  let match;
+  while ((match = regex.exec(pgnText)) !== null) {
+    headers[match[1]] = match[2];
+  }
+  return headers;
+}
+
+function renderMatchBanner(headers = {}) {
+  const banner = $("#match-banner");
+  if (!banner) return;
+  const whiteName = headers.White || "White";
+  const blackName = headers.Black || "Black";
+  const whiteElo = headers.WhiteElo ? `(${headers.WhiteElo})` : "";
+  const blackElo = headers.BlackElo ? `(${headers.BlackElo})` : "";
+  const result = headers.Result || "*";
+  const date = headers.Date || headers.UTCDate || "";
+
+  const wNameEl = $("#player-white-name");
+  const wEloEl = $("#player-white-elo");
+  const bNameEl = $("#player-black-name");
+  const bEloEl = $("#player-black-elo");
+  const dateEl = $("#match-date");
+
+  if (wNameEl) wNameEl.textContent = whiteName;
+  if (wEloEl) wEloEl.textContent = whiteElo;
+  if (bNameEl) bNameEl.textContent = blackName;
+  if (bEloEl) bEloEl.textContent = blackElo;
+  if (dateEl) dateEl.textContent = date && date !== "????.??.??" ? date : "";
+
+  const badge = $("#match-result-badge");
+  if (badge) {
+    badge.className = "result-badge";
+    if (result === "1-0") {
+      badge.textContent = "1-0 · White wins";
+      badge.classList.add("white-win");
+    } else if (result === "0-1") {
+      badge.textContent = "0-1 · Black wins";
+      badge.classList.add("black-win");
+    } else if (result === "1/2-1/2" || result === "½-½") {
+      badge.textContent = "½-½ · Draw";
+      badge.classList.add("draw");
+    } else {
+      badge.textContent = result !== "*" ? result : "VS";
+    }
+  }
+
+  banner.hidden = false;
+}
+
 async function initialize() {
-  const state = await chrome.storage.local.get(["reviewPgn", "recording", "moveSounds", "aiEnabled", "aiKey", "aiModel"]);
+  const state = await chrome.storage.local.get(["reviewPgn", "recording", "moveSounds", "aiEnabled", "aiKey", "aiModel", "analysisDepth"]);
   pgn = state.reviewPgn || "";
   gameLocked = Boolean(state.recording);
   moveSoundsEnabled = state.moveSounds !== false;
@@ -997,6 +1524,10 @@ async function initialize() {
   $("#review-ai-enabled").checked = Boolean(state.aiEnabled);
   $("#review-ai-key").value = state.aiKey || "";
   $("#review-ai-model").value = state.aiModel || "gpt-4o-mini";
+  if (state.analysisDepth) {
+    const depthSelect = $("#engine-depth-select");
+    if (depthSelect) depthSelect.value = String(state.analysisDepth);
+  }
   await updateCoachSettingsStatus();
   $("#move-sounds").disabled = gameLocked;
   $("#flip-board").disabled = gameLocked;
@@ -1020,6 +1551,7 @@ async function initialize() {
       positions.push(replay.fen());
     }
     selectedPly = gameHistory.length;
+    renderMatchBanner(extractPgnHeaders(pgn));
     renderBoard();
     pgnValid = true;
     renderSelectedMovePanel();
@@ -1038,8 +1570,20 @@ async function initialize() {
 }
 
 analyzeButton.addEventListener("click", analyzeGame);
+$("#engine-depth-select")?.addEventListener("change", async (event) => {
+  const depth = Number(event.currentTarget.value) || 12;
+  await chrome.storage.local.set({ analysisDepth: depth }).catch(() => {});
+});
 $("#previous-move").addEventListener("click", () => jumpToPly(adjacentPly(selectedPly, "ArrowLeft", gameHistory.length)));
 $("#next-move").addEventListener("click", () => jumpToPly(adjacentPly(selectedPly, "ArrowRight", gameHistory.length)));
+$("#prev-mistake")?.addEventListener("click", () => {
+  const nextPly = adjacentMistakePly(selectedPly, "prev", entries);
+  if (nextPly != null) jumpToPly(nextPly);
+});
+$("#next-mistake")?.addEventListener("click", () => {
+  const nextPly = adjacentMistakePly(selectedPly, "next", entries);
+  if (nextPly != null) jumpToPly(nextPly);
+});
 $("#flip-board").addEventListener("click", () => {
   boardFlipped = !boardFlipped;
   $("#flip-board").setAttribute("aria-pressed", String(boardFlipped));
@@ -1054,17 +1598,26 @@ $("#what-if-undo").addEventListener("click", () => {
   whatIfError = "";
   renderBoard();
   renderWhatIfPanel();
+  renderAdvantage();
   analyzeWhatIfPosition();
 });
 $("#what-if-exit").addEventListener("click", () => {
   exitWhatIf();
   renderBoard();
   renderSelectedMovePanel();
+  renderAdvantage();
 });
 document.addEventListener("keydown", (event) => {
   if (event.altKey || event.ctrlKey || event.metaKey || gameLocked || whatIfGame) return;
   const target = event.target;
   if (target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"))) return;
+  if (event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    event.preventDefault();
+    const dir = event.key === "ArrowRight" ? "next" : "prev";
+    const nextPly = adjacentMistakePly(selectedPly, dir, entries);
+    if (nextPly != null) jumpToPly(nextPly);
+    return;
+  }
   const nextPly = adjacentPly(selectedPly, event.key, gameHistory.length);
   if (nextPly === selectedPly) return;
   event.preventDefault();

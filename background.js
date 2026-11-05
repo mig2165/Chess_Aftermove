@@ -34,15 +34,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "OPEN_REVIEW" && typeof message.pgn === "string") {
-    chrome.storage.local.get(["recording"]).then((state) => {
-      if (state.recording) {
-        sendResponse({ ok: false, error: "Aftermove stays locked until the recorded game ends." });
-        return;
-      }
-      return chrome.storage.local.set({ reviewPgn: message.pgn })
-        .then(() => chrome.tabs.create({ url: chrome.runtime.getURL("review.html") }))
-        .then(() => sendResponse({ ok: true }));
-    }).catch((error) => sendResponse({ ok: false, error: error.message }));
+    chrome.storage.local.set({
+      reviewPgn: message.pgn,
+      recording: false,
+      recordingTabId: null,
+      lastRecordedAt: Date.now()
+    })
+      .then(() => chrome.tabs.create({ url: chrome.runtime.getURL("review.html") }))
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 
@@ -60,7 +60,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "GAME_CAPTURED" && typeof message.pgn === "string") {
     chrome.storage.local.get(["recording", "recordingTabId"]).then((state) => {
-      if (!state.recording || state.recordingTabId !== sender.tab?.id) {
+      if (!state.recording || (state.recordingTabId != null && sender.tab?.id != null && state.recordingTabId !== sender.tab?.id)) {
         sendResponse({ ok: false, error: "No matching recorded game is active." });
         return;
       }
@@ -69,10 +69,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         recording: false,
         recordingTabId: null,
         lastRecordedAt: Date.now()
-      }).then(() => chrome.tabs.create({ url: chrome.runtime.getURL("review.html") }))
-        .then(() => sendResponse({ ok: true }));
+      }).then(() => {
+        if (message.autoOpen) {
+          return chrome.tabs.create({ url: chrome.runtime.getURL("review.html") });
+        }
+      }).then(() => sendResponse({ ok: true }));
     }).catch((error) => {
-      console.error("Could not open the completed-game review.", error);
+      console.error("Could not process the captured game.", error);
       sendResponse({ ok: false, error: error.message });
     });
     return true;

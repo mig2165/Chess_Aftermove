@@ -13,6 +13,12 @@ for (const file of ["manifest.json", "popup.html", "popup.css", "review.html", "
   await cp(path.join(root, file), path.join(dist, file));
 }
 
+try {
+  await cp(path.join(root, "icons"), path.join(dist, "icons"), { recursive: true });
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+
 for (const [entry, output] of [
   ["src/popup.js", "popup.js"],
   ["src/review.js", "review.js"],

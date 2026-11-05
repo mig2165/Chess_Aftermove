@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { boardPoint, displaySquare } from "../src/board-view.js";
 import { Chess } from "chess.js";
 import { evaluationAtPly, formatEvaluation, formatEvaluationSwing, whiteAdvantageShare } from "../src/advantage.js";
-import { adjacentPly, classify, classifyPlayedMove, moveLoss, moveMark, scoreFromInfo } from "../src/engine-logic.js";
+import { adjacentMistakePly, adjacentPly, classify, classifyPlayedMove, dispatchParallelTasks, isBadMove, moveAccuracy, moveLoss, moveMark, playerAccuracy, scoreFromInfo } from "../src/engine-logic.js";
 import { localGameEndResult } from "../src/game-end.js";
-import { moveTokens, replayMoveTexts } from "../src/move-capture.js";
+import { extractMoveTextFromNode, moveTokens, replayMoveTexts } from "../src/move-capture.js";
 import { terminalResultFromTexts } from "../src/terminal-result.js";
 
 test("move loss measures evaluations from the mover's perspective", () => {
@@ -46,6 +46,85 @@ test("ordinary moves receive a chess-review label based on engine loss and best 
   assert.equal(classifyPlayedMove({ beforeScore, afterScore: { type: "cp", value: 125 }, turn: "w", actualSan: "a4", bestSan: "Nf3" }).category, "inaccuracy");
 });
 
+test("isBadMove flags blunders, mistakes, inaccuracies, and misses automatically", () => {
+  assert.equal(isBadMove("blunder"), true);
+  assert.equal(isBadMove("mistake"), true);
+  assert.equal(isBadMove("inaccuracy"), true);
+  assert.equal(isBadMove("miss"), true);
+  assert.equal(isBadMove({ category: "blunder", loss: 350 }), true);
+  assert.equal(isBadMove({ category: "mistake", loss: 160 }), true);
+  assert.equal(isBadMove({ category: "inaccuracy", loss: 85 }), true);
+  assert.equal(isBadMove({ category: "best", loss: 0 }), false);
+  assert.equal(isBadMove({ category: "good", loss: 15 }), false);
+  assert.equal(isBadMove({ category: "excellent", loss: -100 }), false);
+  assert.equal(isBadMove(null), false);
+});
+
+test("moveAccuracy and playerAccuracy compute realistic percentage scores from loss", () => {
+  assert.equal(moveAccuracy(0), 100);
+  assert.equal(moveAccuracy(-50), 100);
+  assert.ok(moveAccuracy(80) > 65 && moveAccuracy(80) < 75);
+  assert.ok(moveAccuracy(300) > 15 && moveAccuracy(300) < 35);
+  assert.equal(moveAccuracy(2000), 0);
+
+  const whiteEntries = [
+    { turn: "w", loss: 0 },
+    { turn: "b", loss: 300 },
+    { turn: "w", loss: 20 },
+    { turn: "b", loss: 150 }
+  ];
+  const whiteAcc = playerAccuracy(whiteEntries, "w");
+  const blackAcc = playerAccuracy(whiteEntries, "b");
+  assert.ok(whiteAcc > 90);
+  assert.ok(blackAcc < 50);
+});
+
+test("adjacentMistakePly skips directly between blunders and mistakes", () => {
+  const entries = [
+    { ply: 1, category: "best", loss: 0 },
+    { ply: 2, category: "inaccuracy", loss: 80 },
+    { ply: 3, category: "good", loss: 20 },
+    { ply: 4, category: "blunder", loss: 350 },
+    { ply: 5, category: "best", loss: 0 }
+  ];
+  assert.equal(adjacentMistakePly(1, 1, entries), 2);
+  assert.equal(adjacentMistakePly(2, 1, entries), 4);
+  assert.equal(adjacentMistakePly(4, 1, entries), 4); // no more mistakes forward
+  assert.equal(adjacentMistakePly(5, -1, entries), 4);
+  assert.equal(adjacentMistakePly(4, -1, entries), 2);
+  assert.equal(adjacentMistakePly(2, -1, entries), 2); // no more mistakes backward
+});
+
+test("dispatchParallelTasks distributes work across multiple workers preserving order", async () => {
+  const items = ["fen0", "fen1", "fen2", "fen3", "fen4", "fen5", "fen6", "fen7"];
+  const mockWorkers = [{ id: "w1" }, { id: "w2" }, { id: "w3" }];
+  const progressLogs = [];
+
+  const results = await dispatchParallelTasks(
+    items,
+    mockWorkers,
+    async (worker, item, idx) => {
+      // Simulate variable latency (e.g. later items finish earlier)
+      await new Promise((resolve) => setTimeout(resolve, (items.length - idx) * 3));
+      return { workerId: worker.id, item, idx, resultScore: idx * 10 };
+    },
+    (done, total) => {
+      progressLogs.push({ done, total });
+    }
+  );
+
+  assert.equal(results.length, items.length);
+  // Verify strict ordering is maintained despite out-of-order completions
+  for (let i = 0; i < items.length; i++) {
+    assert.equal(results[i].idx, i);
+    assert.equal(results[i].item, items[i]);
+    assert.equal(results[i].resultScore, i * 10);
+  }
+  assert.equal(progressLogs.length, items.length);
+  assert.equal(progressLogs[progressLogs.length - 1].done, items.length);
+  assert.equal(progressLogs[progressLogs.length - 1].total, items.length);
+});
+
 test("arrow keys traverse plies without moving beyond either end", () => {
   assert.equal(adjacentPly(2, "ArrowLeft", 7), 1);
   assert.equal(adjacentPly(2, "ArrowUp", 7), 1);
@@ -79,6 +158,40 @@ test("visible checkmate and result messages confirm completed games", () => {
   assert.equal(terminalResultFromTexts(["Draw by stalemate"]), "1/2-1/2");
   assert.equal(terminalResultFromTexts(["A comment mentions checkmate"]), null);
   assert.equal(terminalResultFromTexts(["Game in progress"]), null);
+  assert.equal(terminalResultFromTexts(["White is victorious"]), "1-0");
+  assert.equal(terminalResultFromTexts(["Black is victorious"]), "0-1");
+  assert.equal(terminalResultFromTexts(["Checkmate"]), "*");
+  assert.equal(terminalResultFromTexts(["Game Review"]), "*");
+  assert.equal(terminalResultFromTexts(["Rematch"]), "*");
+  assert.equal(terminalResultFromTexts(["New 3 min"]), null);
+  assert.equal(terminalResultFromTexts(["New Game"]), null);
+  assert.equal(terminalResultFromTexts(["Draw by agreement"]), "1/2-1/2");
+  assert.equal(terminalResultFromTexts(["Hikaru won • Checkmate"]), "*");
+  assert.equal(terminalResultFromTexts(["magnus won • checkmate"]), "*");
+  assert.equal(terminalResultFromTexts(["opponent won • Resignation"]), "*");
+  assert.equal(terminalResultFromTexts(["hikaru won • by resignation"]), "*");
+  assert.equal(terminalResultFromTexts(["1/2-1/2"]), "1/2-1/2");
+  assert.equal(terminalResultFromTexts(["½-½"]), "1/2-1/2");
+  assert.equal(terminalResultFromTexts(["1-0"]), "1-0");
+  assert.equal(terminalResultFromTexts(["0-1"]), "0-1");
+  assert.equal(terminalResultFromTexts(["White won on time"]), "1-0");
+  assert.equal(terminalResultFromTexts(["Black won on time"]), "0-1");
+  assert.equal(terminalResultFromTexts(["Black timed out"]), "1-0");
+  assert.equal(terminalResultFromTexts(["White timed out"]), "0-1");
+  assert.equal(terminalResultFromTexts(["Stalemate"]), "1/2-1/2");
+  assert.equal(terminalResultFromTexts(["Draw by repetition"]), "1/2-1/2");
+  assert.equal(terminalResultFromTexts(["Threefold repetition"]), "1/2-1/2");
+
+  // In-game live action controls MUST NOT trigger completed game
+  assert.equal(terminalResultFromTexts(["Offer Draw"]), null);
+  assert.equal(terminalResultFromTexts(["Draw offer"]), null);
+  assert.equal(terminalResultFromTexts(["Resign"]), null);
+  assert.equal(terminalResultFromTexts(["Are you sure you want to resign?"]), null);
+  assert.equal(terminalResultFromTexts(["Click again to resign"]), null);
+  assert.equal(terminalResultFromTexts(["Draw"]), null);
+  assert.equal(terminalResultFromTexts(["Cancel"]), null);
+  assert.equal(terminalResultFromTexts(["1. e4 e5 Offer Draw Resign"]), null);
+  assert.equal(terminalResultFromTexts(["Draw arrows"]), null);
 });
 
 test("move capture replays individual, paired, figurine, and UCI move-list entries", () => {
@@ -89,6 +202,72 @@ test("move capture replays individual, paired, figurine, and UCI move-list entri
   const uci = replayMoveTexts(["e2e4 e7e5", "g1f3 b8c6"]);
   assert.equal(uci.complete, true);
   assert.equal(uci.game.fen().includes(" w KQkq - 2 3"), true);
+});
+
+test("move capture parses castling 0-0, 0-0-0, checks, and disambiguated piece moves without truncation", () => {
+  assert.deepEqual(moveTokens("0-0").map((t) => t.san), ["O-O"]);
+  assert.deepEqual(moveTokens("0-0-0").map((t) => t.san), ["O-O-O"]);
+  assert.deepEqual(moveTokens("0-0+").map((t) => t.san), ["O-O+"]);
+  assert.deepEqual(moveTokens("0-0-0#").map((t) => t.san), ["O-O-O#"]);
+  assert.deepEqual(moveTokens("0-0 +0.3 2:54").map((t) => t.san), ["O-O"]);
+  assert.deepEqual(moveTokens("0-0-0 -0.8 1:12").map((t) => t.san), ["O-O-O"]);
+
+  const fakeCastleNode = {
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    textContent: "0-0",
+    cloneNode: () => fakeCastleNode,
+    querySelectorAll: () => []
+  };
+  assert.equal(extractMoveTextFromNode(fakeCastleNode), "O-O");
+
+  const fakeCastleQueenNode = {
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    textContent: "0-0-0 2:10",
+    cloneNode: () => fakeCastleQueenNode,
+    querySelectorAll: () => []
+  };
+  assert.equal(extractMoveTextFromNode(fakeCastleQueenNode), "O-O-O");
+
+  // Replay a 13-move Queen's Gambit opening with both Kingside and Queenside castling
+  const qgd = [
+    "1. d4 2:59 d5 2:58",
+    "2. c4 2:56 e6 2:55",
+    "3. Nc3 2:50 Nf6 2:48",
+    "4. Bg5 2:45 Be7 2:40",
+    "5. e3 2:38 0-0 2:35",
+    "6. Qc2 2:30 c6 2:25",
+    "7. 0-0-0 2:20 Nbd7 2:15"
+  ];
+  const replayed = replayMoveTexts(qgd);
+  assert.equal(replayed.complete, true);
+  assert.equal(replayed.moves.length, 14);
+  assert.ok(replayed.moves.includes("O-O"));
+  assert.ok(replayed.moves.includes("O-O-O"));
+  assert.ok(replayed.moves.includes("Nbd7"));
+});
+
+test("move capture handles clock times, eval badges, and extracts figurines accurately", () => {
+  assert.deepEqual(moveTokens("1. e4 2:59 e5 2:58 2. Nf3 +0.4 Nc6 -0.1").map((token) => token.san), ["e4", "e5", "Nf3", "Nc6"]);
+
+  const fakeKnightNode = {
+    getAttribute: (attr) => (attr === "data-figurine" ? "N" : null),
+    hasAttribute: (attr) => attr === "data-figurine",
+    textContent: "f3 2:45",
+    cloneNode: () => fakeKnightNode,
+    querySelectorAll: () => []
+  };
+  assert.equal(extractMoveTextFromNode(fakeKnightNode), "Nf3");
+
+  const fakeBishopIconNode = {
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    textContent: "xd5",
+    cloneNode: () => fakeBishopIconNode,
+    querySelectorAll: (sel) => (sel.includes("icon-font-chess") ? [{ className: "icon-font-chess bishop-white" }] : [])
+  };
+  assert.equal(extractMoveTextFromNode(fakeBishopIconNode), "Bxd5");
 });
 
 test("move capture refuses move lists whose legal sequence breaks", () => {

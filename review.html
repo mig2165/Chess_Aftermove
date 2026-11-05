@@ -19,7 +19,46 @@
           <h1 id="review-title">Let’s look at the game.</h1>
           <p id="review-summary" class="summary">Stockfish will review the completed game on this device.</p>
         </div>
-        <button id="analyze-button" class="primary-button" type="button" disabled>Analyze with Stockfish</button>
+        <div class="review-actions-group">
+          <div class="depth-picker">
+            <label for="engine-depth-select" class="depth-label">ENGINE DEPTH</label>
+            <select id="engine-depth-select" class="depth-select" title="Analysis depth and evaluation speed">
+              <option value="10">Quick · Depth 10 (~4s)</option>
+              <option value="12" selected>Standard · Depth 12 (~10s)</option>
+              <option value="15">Deep · Depth 15 (~25s)</option>
+            </select>
+          </div>
+          <button id="analyze-button" class="primary-button" type="button" disabled>Analyze with Stockfish</button>
+        </div>
+      </section>
+
+      <section id="match-banner" class="match-banner" hidden aria-label="Game participants and result">
+        <div class="match-player white-player">
+          <span class="player-icon" aria-hidden="true">♔</span>
+          <div class="player-meta">
+            <span id="player-white-name" class="player-name">White</span>
+            <span id="player-white-elo" class="player-elo"></span>
+          </div>
+          <div id="white-accuracy-badge" class="player-accuracy" hidden>
+            <span class="acc-val" id="white-acc-val">—</span>
+            <span class="acc-lbl">ACCURACY</span>
+          </div>
+        </div>
+        <div class="match-vs">
+          <span id="match-result-badge" class="result-badge">VS</span>
+          <span id="match-date" class="match-date"></span>
+        </div>
+        <div class="match-player black-player">
+          <div id="black-accuracy-badge" class="player-accuracy" hidden>
+            <span class="acc-val" id="black-acc-val">—</span>
+            <span class="acc-lbl">ACCURACY</span>
+          </div>
+          <div class="player-meta">
+            <span id="player-black-name" class="player-name">Black</span>
+            <span id="player-black-elo" class="player-elo"></span>
+          </div>
+          <span class="player-icon" aria-hidden="true">♚</span>
+        </div>
       </section>
 
       <section id="progress-region" class="progress-region" aria-live="polite" hidden>
@@ -51,9 +90,11 @@
           <div class="board-column">
             <div id="chessboard" class="chessboard" role="grid" aria-label="Chess position after the selected move"></div>
             <div class="board-controls">
+              <button id="prev-mistake" class="mistake-jump-button" type="button" title="Previous mistake (Shift+Left)" aria-label="Previous mistake" disabled>◀ Mistake</button>
               <button id="previous-move" class="board-button" type="button" aria-label="Previous move" aria-keyshortcuts="ArrowLeft ArrowUp" disabled>◀</button>
               <span id="move-position" aria-live="polite">Start position</span>
               <button id="next-move" class="board-button" type="button" aria-label="Next move" aria-keyshortcuts="ArrowRight ArrowDown" disabled>▶</button>
+              <button id="next-mistake" class="mistake-jump-button" type="button" title="Next mistake (Shift+Right)" aria-label="Next mistake" disabled>Mistake ▶</button>
             </div>
             <div class="board-actions">
               <button id="flip-board" class="flip-board-button" type="button" aria-pressed="false">↻ Flip board</button>
@@ -87,7 +128,7 @@
               </div>
             </section>
             <div class="replay-options">
-              <span class="keyboard-hint">Arrow keys to step through moves</span>
+              <span class="keyboard-hint">Arrow keys to step · Shift+Arrows for mistakes</span>
               <label class="sound-toggle"><input id="move-sounds" type="checkbox" checked> <span>Move sounds</span></label>
             </div>
             <p id="sound-status" class="visually-hidden" aria-live="polite"></p>

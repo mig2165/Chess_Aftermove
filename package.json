@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "zip": "node scripts/build.mjs && powershell -NoProfile -Command \"$ProgressPreference = 'SilentlyContinue'; Compress-Archive -Path dist\\* -DestinationPath aftermove.zip -Force\"",
     "setup:engine": "node scripts/download-stockfish.mjs",
     "test": "node --test"
   },
