@@ -57,15 +57,23 @@ export function adjacentMistakePly(currentPly, direction, entries) {
   return currentPly;
 }
 
-export function classifyPlayedMove({ beforeScore, afterScore, turn, actualSan = "", bestSan = "", checkmatedOpponent = false }) {
+export function classifyPlayedMove({ beforeScore, afterScore, turn, actualSan = "", bestSan = "", checkmatedOpponent = false, legalMovesCount = null }) {
   if (checkmatedOpponent) return { loss: -100000, category: "best" };
+  const cleanActual = actualSan.replace(/[+#]$/, "");
+  const cleanBest = bestSan.replace(/[+#]$/, "");
+  const sameMove = cleanActual && cleanBest && cleanActual === cleanBest;
+
+  // If the move played matches Stockfish's best move, or it was the only legal move available (forced)
+  if (sameMove || legalMovesCount === 1) {
+    return { loss: 0, category: "best" };
+  }
+
   const loss = Math.round(moveLoss(beforeScore, afterScore, turn));
   if (loss >= 300) return { loss, category: "blunder" };
   if (loss >= 150) return { loss, category: "mistake" };
   if (loss >= 75) return { loss, category: "inaccuracy" };
   if (loss <= -100) return { loss, category: "excellent" };
-  const sameMove = actualSan.replace(/[+#]$/, "") === bestSan.replace(/[+#]$/, "");
-  return { loss, category: sameMove ? "best" : "good" };
+  return { loss, category: "good" };
 }
 
 export function scoreFromInfo(line, turn) {

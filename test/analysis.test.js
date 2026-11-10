@@ -7,6 +7,32 @@ import { adjacentMistakePly, adjacentPly, classify, classifyPlayedMove, dispatch
 import { localGameEndResult } from "../src/game-end.js";
 import { extractMoveTextFromNode, moveTokens, replayMoveTexts } from "../src/move-capture.js";
 import { terminalResultFromTexts } from "../src/terminal-result.js";
+import { detectGamePatterns } from "../src/reflection.js";
+
+test("detectGamePatterns flags post-castling drift and premature queen moves", () => {
+  const dummyEntries = [
+    { ply: 16, actualSan: "h3", category: "mistake", loss: 160 },
+    { ply: 18, actualSan: "Re1", category: "inaccuracy", loss: 90 },
+    { ply: 4, actualSan: "Qh5", category: "blunder", loss: 320 }
+  ];
+  const patterns = detectGamePatterns(dummyEntries, []);
+  const ids = patterns.map((p) => p.id);
+  assert.ok(ids.includes("opening-post-castling"));
+  assert.ok(ids.includes("early-queen"));
+});
+
+test("detectGamePatterns flags wrong trades and king safety issues", () => {
+  const history = [{ color: "w", san: "O-O" }];
+  const dummyEntries = [
+    { ply: 18, turn: "w", actualSan: "Bxe4", category: "mistake", loss: 260, consequenceLine: ["Nxe4"] },
+    { ply: 22, turn: "w", actualSan: "Bxf7+", category: "blunder", loss: 300, consequenceLine: ["Kxf7"] },
+    { ply: 20, turn: "w", actualSan: "g4", category: "blunder", loss: 350 }
+  ];
+  const patterns = detectGamePatterns(dummyEntries, history);
+  const ids = patterns.map((p) => p.id);
+  assert.ok(ids.includes("wrong-trade"));
+  assert.ok(ids.includes("king-safety"));
+});
 
 test("move loss measures evaluations from the mover's perspective", () => {
   assert.equal(moveLoss({ type: "cp", value: 100 }, { type: "cp", value: 250 }, "w"), 350);

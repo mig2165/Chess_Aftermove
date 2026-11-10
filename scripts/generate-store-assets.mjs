@@ -1,543 +1,771 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
 import path from "node:path";
-import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { Chess } from "chess.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const distDir = path.join(root, "dist");
 const assetsDir = path.join(root, "store-assets");
 
-if (!fs.existsSync(assetsDir)) {
-  fs.mkdirSync(assetsDir, { recursive: true });
+await fsp.mkdir(assetsDir, { recursive: true });
+
+// Build a verified, tactical club game with best moves, great moves, inaccuracies, mistakes, blunders, and checkmate.
+const SAMPLE_PGN = [
+  '[Event "Live Chess"]',
+  '[Site "Chess.com"]',
+  '[Date "2026.11.05"]',
+  '[White "Alex_M"]',
+  '[Black "Nora_V"]',
+  '[Result "1-0"]',
+  '[WhiteElo "1645"]',
+  '[BlackElo "1630"]',
+  "",
+  "1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d4 exd4 6. cxd4 Bb6 7. Nc3 d6",
+  "8. h3 O-O 9. O-O h6 10. Re1 Re8 11. Bf4 Nxe4 12. Nxe4 d5 13. Bxd5 Qxd5",
+  "14. Nf6+ gxf6 15. Rxe8+ Kg7 16. Qd2 Qh5 17. Bxh6+ Qxh6 18. Rg8+ Kxg8 19. Qxh6 Nxd4",
+  "20. Nxd4 Bxd4 21. Rd1 c5 22. Rd3 Bf5 23. Rg3+ Bg6 24. h4 Re8 25. h5 Re1+",
+  "26. Kh2 Be5 27. f4 Bd4 28. hxg6 Bg1+ 29. Kh3 fxg6 30. Qxg6+ Kf8 31. Qxf6+ Ke8",
+  "32. Rg8+ Kd7 33. Rd8+ Kc7 34. Qd6# 1-0"
+].join("\n");
+
+// Verify PGN legality up front with chess.js
+{
+  const check = new Chess();
+  check.loadPgn(SAMPLE_PGN);
+  if (!check.isCheckmate()) {
+    throw new Error("Sample PGN did not end in checkmate as expected.");
+  }
 }
 
-// Precompute CRC table
-const crcTable = new Uint32Array(256);
-for (let n = 0; n < 256; n++) {
-  let c = n;
-  for (let k = 0; k < 8; k++) {
-    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-  }
-  crcTable[n] = c;
-}
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".png": "image/png",
+  ".svg": "image/svg+xml"
+};
 
-function crc32(buf) {
-  let c = 0 ^ (-1);
-  for (let i = 0; i < buf.length; i++) {
-    c = (c >>> 8) ^ crcTable[(c ^ buf[i]) & 0xFF];
-  }
-  return (c ^ (-1)) >>> 0;
-}
-
-function createPng(width, height, rgbaBuffer) {
-  const sig = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-
-  const ihdrData = Buffer.alloc(13);
-  ihdrData.writeUInt32BE(width, 0);
-  ihdrData.writeUInt32BE(height, 4);
-  ihdrData[8] = 8;
-  ihdrData[9] = 6; // RGBA
-  ihdrData[10] = 0;
-  ihdrData[11] = 0;
-  ihdrData[12] = 0;
-
-  const ihdrChunk = createChunk("IHDR", ihdrData);
-
-  const scanlines = Buffer.alloc(height * (1 + width * 4));
-  for (let y = 0; y < height; y++) {
-    const scanlineOffset = y * (1 + width * 4);
-    scanlines[scanlineOffset] = 0;
-    rgbaBuffer.copy(scanlines, scanlineOffset + 1, y * width * 4, (y + 1) * width * 4);
-  }
-
-  const compressed = zlib.deflateSync(scanlines, { level: 9 });
-  const idatChunk = createChunk("IDAT", compressed);
-  const iendChunk = createChunk("IEND", Buffer.alloc(0));
-
-  return Buffer.concat([sig, ihdrChunk, idatChunk, iendChunk]);
-}
-
-function createChunk(type, data) {
-  const len = data.length;
-  const chunk = Buffer.alloc(12 + len);
-  chunk.writeUInt32BE(len, 0);
-  chunk.write(type, 4, 4, "ascii");
-  data.copy(chunk, 8);
-  const typeAndData = chunk.subarray(4, 8 + len);
-  chunk.writeUInt32BE(crc32(typeAndData), 8 + len);
-  return chunk;
-}
-
-class ImageBuffer {
-  constructor(width, height) {
-    this.width = width;
-    this.height = height;
-    this.buffer = Buffer.alloc(width * height * 4);
-  }
-
-  setPixel(x, y, r, g, b, a = 255) {
-    x = Math.round(x);
-    y = Math.round(y);
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
-    const idx = (y * this.width + x) * 4;
-    const curA = a / 255;
-    const bgA = this.buffer[idx + 3] / 255;
-    const outA = curA + bgA * (1 - curA);
-    if (outA === 0) return;
-    this.buffer[idx] = Math.round((r * curA + this.buffer[idx] * bgA * (1 - curA)) / outA);
-    this.buffer[idx + 1] = Math.round((g * curA + this.buffer[idx + 1] * bgA * (1 - curA)) / outA);
-    this.buffer[idx + 2] = Math.round((b * curA + this.buffer[idx + 2] * bgA * (1 - curA)) / outA);
-    this.buffer[idx + 3] = Math.round(outA * 255);
-  }
-
-  fillRect(x1, y1, w, h, [r, g, b, a = 255]) {
-    for (let y = y1; y < y1 + h; y++) {
-      for (let x = x1; x < x1 + w; x++) {
-        this.setPixel(x, y, r, g, b, a);
+const CHROME_SHIM = `<script>
+(() => {
+  const store = {
+    reviewPgn: ${JSON.stringify(SAMPLE_PGN)},
+    recording: false,
+    moveSounds: false,
+    aiEnabled: false,
+    aiKey: "",
+    aiModel: "gpt-4o-mini",
+    analysisDepth: 10
+  };
+  window.chrome = {
+    storage: {
+      local: {
+        get: async (keys) => {
+          if (!keys) return { ...store };
+          if (typeof keys === "string") return { [keys]: store[keys] };
+          if (Array.isArray(keys)) {
+            return Object.fromEntries(keys.map((k) => [k, store[k]]));
+          }
+          return { ... keys, ...store };
+        },
+        set: async (obj) => {
+          Object.assign(store, obj);
+        },
+        remove: async (keys) => {
+          for (const k of [].concat(keys)) delete store[k];
+        }
+      },
+      onChanged: {
+        addListener: () => {}
       }
+    },
+    runtime: {
+      getURL: (p) => "/" + String(p).replace(/^\\/+/, "")
     }
+  };
+})();
+</script>`;
+
+const PROMO_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 440px;
+        height: 280px;
+        overflow: hidden;
+        font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+        background:
+          radial-gradient(ellipse at 88% 12%, rgba(216, 243, 106, 0.16), transparent 48%),
+          radial-gradient(ellipse at 12% 100%, rgba(34, 197, 94, 0.10), transparent 45%),
+          #101719;
+        color: #f3f5ef;
+        display: grid;
+        grid-template-columns: 1.18fr 0.82fr;
+        align-items: center;
+        padding: 26px 26px 24px 28px;
+        gap: 16px;
+        position: relative;
+        border: 1px solid #2b3833;
+      }
+      .copy {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        height: 100%;
+        z-index: 2;
+      }
+      .wordmark {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        color: #f3f5ef;
+      }
+      .wordmark .mark {
+        display: grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        border: 1.5px solid #d8f36a;
+        border-radius: 8px 8px 8px 3px;
+        color: #d8f36a;
+        font: 700 17px Georgia, serif;
+        letter-spacing: 0;
+        background: rgba(216, 243, 106, 0.07);
+      }
+      .headline {
+        margin-top: 8px;
+      }
+      .kicker {
+        color: #d8f36a;
+        font-size: 8.5px;
+        font-weight: 750;
+        letter-spacing: 0.15em;
+        margin-bottom: 7px;
+      }
+      h1 {
+        font-size: 27px;
+        line-height: 1.04;
+        letter-spacing: -0.045em;
+        font-weight: 800;
+        color: #f3f5ef;
+      }
+      h1 em {
+        font-style: italic;
+        font-family: Georgia, serif;
+        font-weight: 400;
+        color: #d8f36a;
+      }
+      .sub {
+        margin-top: 9px;
+        font-size: 11.5px;
+        line-height: 1.42;
+        color: #b7c3bc;
+      }
+      .pills {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .pill {
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid #35453e;
+        background: #17211e;
+        color: #d8e2d9;
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      .pill.accent {
+        border-color: rgba(216, 243, 106, 0.45);
+        background: rgba(216, 243, 106, 0.12);
+        color: #d8f36a;
+      }
+      .board-card {
+        position: relative;
+        width: 156px;
+        height: 156px;
+        justify-self: end;
+        border: 1px solid #64756a;
+        border-radius: 5px;
+        overflow: hidden;
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48);
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        grid-template-rows: repeat(4, 1fr);
+      }
+      .sq {
+        display: grid;
+        place-items: center;
+        font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
+        font-size: 26px;
+        color: #16211b;
+        position: relative;
+      }
+      .sq.l { background: #d4d9c8; }
+      .sq.d { background: #718876; }
+      .sq.hl { background: #cadb7b; }
+      .sq.target { box-shadow: inset 0 0 0 2.5px #22c55e; }
+      .badge {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        padding: 1px 4px;
+        border-radius: 3px;
+        background: #f3f5ef;
+        color: #8d2118;
+        font: 800 9px "Segoe UI", sans-serif;
+        border: 1px solid rgba(22, 33, 27, 0.2);
+      }
+      svg.arrow {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="copy">
+      <div class="wordmark"><span class="mark">A</span> AFTERMOVE</div>
+      <div class="headline">
+        <p class="kicker">QUIET IN-GAME · HONEST AFTER</p>
+        <h1>Play first.<br><em>Review locally.</em></h1>
+        <p class="sub">Silent Chess.com recorder with local Stockfish accuracy, blunder arrows &amp; what-if lines.</p>
+      </div>
+      <div class="pills">
+        <span class="pill accent">✓ Local Stockfish</span>
+        <span class="pill">Zero Live Hints</span>
+      </div>
+    </div>
+    <div class="board-card" aria-hidden="true">
+      <div class="sq l"></div>
+      <div class="sq d">♛</div>
+      <div class="sq l"></div>
+      <div class="sq d">♚</div>
+      <div class="sq d"></div>
+      <div class="sq l target"></div>
+      <div class="sq d">♟</div>
+      <div class="sq l">♟</div>
+      <div class="sq l"></div>
+      <div class="sq d"></div>
+      <div class="sq l hl">♞<span class="badge">‼</span></div>
+      <div class="sq d"></div>
+      <div class="sq d"></div>
+      <div class="sq l">♖</div>
+      <div class="sq d"></div>
+      <div class="sq l">♔</div>
+      <svg class="arrow" viewBox="0 0 156 156">
+        <defs>
+          <marker id="ah" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto">
+            <path d="M0,0.5 L5.5,3 L0,5.5 Z" fill="#22c55e" />
+          </marker>
+        </defs>
+        <line x1="58" y1="136" x2="58" y2="66" stroke="#22c55e" stroke-width="5.5" stroke-linecap="round" marker-end="url(#ah)" opacity="0.92" />
+      </svg>
+    </div>
+  </body>
+</html>`;
+
+function findBrowserExecutable() {
+  const candidates = [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error("Could not find Chrome or Edge executable to capture screenshots.");
+}
+
+function startStaticServer() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url, "http://127.0.0.1");
+        if (url.pathname === "/promo.html") {
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(PROMO_HTML);
+          return;
+        }
+        const relPath = url.pathname === "/" ? "review.html" : url.pathname.replace(/^\/+/, "");
+        const fullPath = path.resolve(distDir, relPath);
+        if (!fullPath.startsWith(distDir)) {
+          res.writeHead(403);
+          res.end("Forbidden");
+          return;
+        }
+        const ext = path.extname(fullPath).toLowerCase();
+        if (relPath === "review.html") {
+          let html = await fsp.readFile(fullPath, "utf8");
+          html = html.replace("<head>", `<head>\n${CHROME_SHIM}`);
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(html);
+          return;
+        }
+        const data = await fsp.readFile(fullPath);
+        res.writeHead(200, { "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
+        res.end(data);
+      } catch (err) {
+        res.writeHead(404);
+        res.end(String(err.message));
+      }
+    });
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      resolve({ server, port: addr.port });
+    });
+  });
+}
+
+function launchHeadlessBrowser(browserPath, userDataDir) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(
+      browserPath,
+      [
+        "--headless=new",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${userDataDir}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--disable-extensions",
+        "--mute-audio",
+        "--hide-scrollbars",
+        "--window-size=1280,800",
+        "about:blank"
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] }
+    );
+
+    let stderrText = "";
+    const timeout = setTimeout(() => {
+      proc.kill();
+      reject(new Error(`Timed out waiting for Chrome DevTools endpoint. Stderr:\n${stderrText}`));
+    }, 15000);
+
+    proc.stderr.on("data", (chunk) => {
+      stderrText += chunk.toString("utf8");
+      const match = stderrText.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      if (match) {
+        clearTimeout(timeout);
+        resolve({ proc, wsUrl: match[1] });
+      }
+    });
+
+    proc.on("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Browser exited early with code ${code}. Stderr:\n${stderrText}`));
+    });
+  });
+}
+
+class CdpSession {
+  constructor(ws) {
+    this.ws = ws;
+    this.nextId = 1;
+    this.pending = new Map();
+    ws.addEventListener("message", (event) => {
+      const msg = JSON.parse(typeof event.data === "string" ? event.data : event.data.toString());
+      if (msg.id && this.pending.has(msg.id)) {
+        const { resolve, reject, sessionId } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message));
+        else resolve(msg.result);
+      }
+    });
   }
 
-  fillRoundedRect(x1, y1, w, h, radius, [r, g, b, a = 255]) {
-    for (let y = y1; y < y1 + h; y++) {
-      for (let x = x1; x < x1 + w; x++) {
-        const dx = Math.max(0, Math.max(x1 + radius - x, x - (x1 + w - 1 - radius)));
-        const dy = Math.max(0, Math.max(y1 + radius - y, y - (y1 + h - 1 - radius)));
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= radius) {
-          const edge = radius - dist;
-          const alpha = Math.min(1, edge + 0.5) * (a / 255) * 255;
-          this.setPixel(x, y, r, g, b, alpha);
+  static async connect(wsUrl) {
+    const ws = new WebSocket(wsUrl);
+    await new Promise((resolve, reject) => {
+      ws.addEventListener("open", resolve, { once: true });
+      ws.addEventListener("error", reject, { once: true });
+    });
+    return new CdpSession(ws);
+  }
+
+  send(method, params = {}, sessionId = undefined) {
+    const id = this.nextId++;
+    const payload = { id, method, params };
+    if (sessionId) payload.sessionId = sessionId;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject, sessionId });
+      this.ws.send(JSON.stringify(payload));
+    });
+  }
+
+  close() {
+    this.ws.close();
+  }
+}
+
+function readPngDimensions(buf) {
+  return {
+    width: buf.readUInt32BE(16),
+    height: buf.readUInt32BE(20)
+  };
+}
+
+async function captureViewportPng(cdp, sessionId, width, height, outPath) {
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width, height, deviceScaleFactor: 1, mobile: false },
+    sessionId
+  );
+  await new Promise((r) => setTimeout(r, 300));
+  const { data } = await cdp.send(
+    "Page.captureScreenshot",
+    {
+      format: "png",
+      captureBeyondViewport: false
+    },
+    sessionId
+  );
+  const buf = Buffer.from(data, "base64");
+  const dims = readPngDimensions(buf);
+  if (dims.width !== width || dims.height !== height) {
+    throw new Error(`Expected ${width}x${height} for ${outPath}, got ${dims.width}x${dims.height}`);
+  }
+  await fsp.writeFile(outPath, buf);
+  console.log(`Captured ${path.relative(root, outPath)} (${dims.width}x${dims.height}, ${(buf.length / 1024).toFixed(1)} KB)`);
+}
+
+async function evalInPage(cdp, sessionId, expression) {
+  const res = await cdp.send(
+    "Runtime.evaluate",
+    { expression, awaitPromise: true, returnByValue: true },
+    sessionId
+  );
+  if (res.exceptionDetails) {
+    throw new Error(`Page evaluation error: ${res.exceptionDetails.text}`);
+  }
+  return res.result?.value;
+}
+
+const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "aftermove-shots-"));
+const { server, port } = await startStaticServer();
+let browserProc;
+let cdp;
+
+try {
+  const browserPath = findBrowserExecutable();
+  console.log(`Using browser: ${browserPath}`);
+  console.log(`Local server listening on http://127.0.0.1:${port}`);
+
+  const launched = await launchHeadlessBrowser(browserPath, userDataDir);
+  browserProc = launched.proc;
+  cdp = await CdpSession.connect(launched.wsUrl);
+
+  const { targetId } = await cdp.send("Target.createTarget", {
+    url: `http://127.0.0.1:${port}/review.html`
+  });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false },
+    sessionId
+  );
+
+  // Wait for review.html to finish initializing PGN
+  await evalInPage(
+    cdp,
+    sessionId,
+    `new Promise((resolve, reject) => {
+      const deadline = Date.now() + 15000;
+      const timer = setInterval(() => {
+        const btn = document.querySelector("#analyze-button");
+        const err = document.querySelector("#error-message");
+        if (err && !err.hidden && err.textContent) {
+          clearInterval(timer);
+          reject(new Error(err.textContent));
+        } else if (btn && !btn.disabled) {
+          clearInterval(timer);
+          resolve(true);
+        } else if (Date.now() > deadline) {
+          clearInterval(timer);
+          reject(new Error("Timed out waiting for Analyze button"));
+        }
+      }, 100);
+    })`
+  );
+
+  console.log("Running real Stockfish analysis on sample game...");
+  await evalInPage(
+    cdp,
+    sessionId,
+    `(() => {
+      document.querySelector("#engine-depth-select").value = "10";
+      document.querySelector("#analyze-button").click();
+    })()`
+  );
+
+  await evalInPage(
+    cdp,
+    sessionId,
+    `new Promise((resolve, reject) => {
+      const deadline = Date.now() + 90000;
+      const timer = setInterval(() => {
+        const btn = document.querySelector("#analyze-button");
+        const err = document.querySelector("#error-message");
+        if (err && !err.hidden && err.textContent) {
+          clearInterval(timer);
+          reject(new Error(err.textContent));
+        } else if (btn && btn.textContent.includes("Analysis complete")) {
+          clearInterval(timer);
+          resolve(true);
+        } else if (Date.now() > deadline) {
+          clearInterval(timer);
+          reject(new Error("Timed out waiting for Stockfish analysis"));
+        }
+      }, 200);
+    })`
+  );
+  console.log("Stockfish analysis complete!");
+
+  // Hide progress region cleanly after completion so layout is crisp
+  await evalInPage(
+    cdp,
+    sessionId,
+    `(() => {
+      document.querySelector("#progress-region").hidden = true;
+    })()`
+  );
+
+  // SCREENSHOT 2 FIRST (Top of page: Header + Match Banner + Accuracies + White vs Black Breakdown Table)
+  await evalInPage(cdp, sessionId, `window.scrollTo(0, 6)`);
+  await captureViewportPng(
+    cdp,
+    sessionId,
+    1280,
+    800,
+    path.join(assetsDir, "screenshot2-breakdown.png")
+  );
+
+  // SCREENSHOT 1: Full Chessboard + Auto Best-Move Green Arrow + Blunder Badge + Advantage Bar + Active Move List
+  const pickedInfo = await evalInPage(
+    cdp,
+    sessionId,
+    `(() => {
+      const tokens = [...document.querySelectorAll(".move-token")];
+      const bad =
+        tokens.find((t) => t.dataset.category === "blunder" && Number(t.dataset.ply) >= 16) ||
+        tokens.find((t) => t.dataset.category === "blunder") ||
+        tokens.find((t) => t.dataset.category === "mistake") ||
+        tokens[Math.floor(tokens.length / 2)];
+      if (bad) bad.click();
+
+      const active = document.querySelector('.move-token[aria-current="true"]');
+      if (active) active.scrollIntoView({ block: "center" });
+
+      const board = document.querySelector("#chessboard");
+      const boardRect = board.getBoundingClientRect();
+      window.scrollTo(0, Math.max(0, window.scrollY + boardRect.top - 16));
+      return {
+        ply: bad?.dataset.ply,
+        category: bad?.dataset.category
+      };
+    })()`
+  );
+  console.log("Selected bad move for Screenshot 1:", pickedInfo);
+  await captureViewportPng(
+    cdp,
+    sessionId,
+    1280,
+    800,
+    path.join(assetsDir, "screenshot1-review.png")
+  );
+
+  // SCREENSHOT 4: 3-Move Best Continuation Sequence Card + Coach's Notes
+  const shot4Info = await evalInPage(
+    cdp,
+    sessionId,
+    `(() => {
+      const tokens = [...document.querySelectorAll(".move-token")];
+      const candidates = tokens.filter((t) =>
+        ["blunder", "mistake", "inaccuracy"].includes(t.dataset.category)
+      );
+      let chosen = null;
+      for (const c of candidates) {
+        c.click();
+        const reason = document.querySelector(".move-panel-reason")?.textContent || "";
+        const hasCont = Boolean(document.querySelector(".best-continuation-box, .best-line-chips, .best-line-chip"));
+        if (hasCont && !/\\d{3}\\.\\d pawns/.test(reason)) {
+          chosen = { ply: c.dataset.ply, category: c.dataset.category, reason };
+          if (c.dataset.category === "blunder" || c.dataset.category === "mistake") break;
         }
       }
-    }
-  }
+      const panel = document.querySelector("#selected-move-panel");
+      const rect = panel.getBoundingClientRect();
+      window.scrollTo(0, Math.max(0, window.scrollY + rect.top - 20));
+      return chosen;
+    })()`
+  );
+  console.log("Selected move for Screenshot 4:", shot4Info);
+  await captureViewportPng(
+    cdp,
+    sessionId,
+    1280,
+    800,
+    path.join(assetsDir, "screenshot4-continuation-coach.png")
+  );
 
-  drawBorder(x1, y1, w, h, radius, borderWidth, [r, g, b, a = 255]) {
-    for (let y = y1; y < y1 + h; y++) {
-      for (let x = x1; x < x1 + w; x++) {
-        const dx = Math.max(0, Math.max(x1 + radius - x, x - (x1 + w - 1 - radius)));
-        const dy = Math.max(0, Math.max(y1 + radius - y, y - (y1 + h - 1 - radius)));
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= radius && dist >= radius - borderWidth) {
-          this.setPixel(x, y, r, g, b, a);
+  // SCREENSHOT 3: Interactive Freeplay ("What-if") mode with full board, alternate move scored, + highlighted legal moves
+  const freeplayInfo = await evalInPage(
+    cdp,
+    sessionId,
+    `new Promise((resolve) => {
+      // Pick a rich middlegame position (ply 22 = 11... Nxe4) where neither side is in check
+      const midToken =
+        document.querySelector('.move-token[data-ply="22"]') ||
+        document.querySelector('.move-token[data-ply="20"]');
+      if (midToken) midToken.click();
+
+      const active = document.querySelector('.move-token[aria-current="true"]');
+      if (active) active.scrollIntoView({ block: "center" });
+
+      const exploreBtn = document.querySelector(".move-panel-explore");
+      if (exploreBtn) exploreBtn.click();
+
+      // Hide secondary panels below board via CSS display so renderAdvantage() does not unhide them
+      const selPanel = document.querySelector("#selected-move-panel");
+      const advPanel = document.querySelector("#advantage-panel");
+      const boardTools = document.querySelector(".board-tools");
+      if (selPanel) selPanel.style.display = "none";
+      if (advPanel) advPanel.style.display = "none";
+      if (boardTools) boardTools.style.display = "none";
+
+      const waitIdle = (cb) => {
+        const deadline = Date.now() + 20000;
+        const timer = setInterval(() => {
+          const evalText = document.querySelector("#what-if-evaluation")?.textContent || "";
+          if (evalText && !evalText.includes("thinking") && !evalText.includes("Preparing")) {
+            clearInterval(timer);
+            cb(true);
+          } else if (Date.now() > deadline) {
+            clearInterval(timer);
+            cb(false);
+          }
+        }, 120);
+      };
+
+      // Step 1: wait for initial Freeplay baseline, play one alternate move so Stockfish rates it
+      waitIdle(() => {
+        const squares = [...document.querySelectorAll("#chessboard .square.freeplay")];
+        let moved = false;
+        for (const sq of squares) {
+          if (sq.textContent.trim()) {
+            sq.click();
+            const legal = document.querySelector("#chessboard .square.is-legal");
+            if (legal) {
+              legal.click();
+              moved = true;
+              break;
+            }
+          }
         }
+
+        // Step 2: wait for Stockfish to finish scoring that alternate move, then select a piece with >= 3 legal moves
+        setTimeout(() => {
+          waitIdle(() => {
+            const nextSquares = [...document.querySelectorAll("#chessboard .square.freeplay")];
+            let legalCount = 0;
+            for (const sq of nextSquares) {
+              if (sq.textContent.trim()) {
+                sq.click();
+                legalCount = document.querySelectorAll("#chessboard .square.is-legal").length;
+                if (legalCount >= 3) break;
+              }
+            }
+            const board = document.querySelector("#chessboard");
+            const bRect = board.getBoundingClientRect();
+            window.scrollTo(0, Math.max(0, window.scrollY + bRect.top - 14));
+            resolve({
+              moved,
+              legalCount,
+              status: document.querySelector("#what-if-status")?.textContent || ""
+            });
+          });
+        }, 150);
+      });
+    })`
+  );
+  console.log("Freeplay state for Screenshot 3:", freeplayInfo);
+  await captureViewportPng(
+    cdp,
+    sessionId,
+    1280,
+    800,
+    path.join(assetsDir, "screenshot3-freeplay.png")
+  );
+
+  // SCREENSHOT 5: Game Reflection & Patterns
+  await evalInPage(
+    cdp,
+    sessionId,
+    `(() => {
+      // Restore any hidden panels so page layout is normal
+      const selPanel = document.querySelector("#selected-move-panel");
+      const advPanel = document.querySelector("#advantage-panel");
+      const boardTools = document.querySelector(".board-tools");
+      if (selPanel) selPanel.style.display = "";
+      if (advPanel) advPanel.style.display = "";
+      if (boardTools) boardTools.style.display = "";
+
+      const habitsSummary = document.querySelector("#habits-summary");
+      const habitsBanner = document.querySelector("#reflection-habits-banner");
+      if (habitsSummary && habitsBanner) {
+        habitsSummary.textContent = '"Trading at the Wrong Time" has appeared across 3 of your reviewed games. Focus on this in your next match!';
+        habitsBanner.hidden = false;
       }
-    }
-  }
 
-  drawLine(x1, y1, x2, y2, thickness, [r, g, b, a = 255]) {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return;
-    const steps = Math.ceil(len * 2);
-    const halfThick = thickness / 2;
-    for (let i = 0; i <= steps; i++) {
-      const cx = x1 + (dx * i) / steps;
-      const cy = y1 + (dy * i) / steps;
-      for (let ty = cy - halfThick; ty <= cy + halfThick; ty++) {
-        for (let tx = cx - halfThick; tx <= cx + halfThick; tx++) {
-          this.setPixel(tx, ty, r, g, b, a);
-        }
+      const refSection = document.querySelector("#reflection-section");
+      if (refSection) {
+        refSection.hidden = false;
+        const rect = refSection.getBoundingClientRect();
+        window.scrollTo(0, Math.max(0, window.scrollY + rect.top - 18));
       }
-    }
-  }
+    })()`
+  );
+  await captureViewportPng(
+    cdp,
+    sessionId,
+    1280,
+    800,
+    path.join(assetsDir, "screenshot5-reflection.png")
+  );
 
-  toPng() {
-    return createPng(this.width, this.height, this.buffer);
-  }
+  // PROMO TILE: 440x280 crisp HTML/CSS render
+  await cdp.send("Page.navigate", { url: `http://127.0.0.1:${port}/promo.html` }, sessionId);
+  await new Promise((r) => setTimeout(r, 400));
+  await captureViewportPng(
+    cdp,
+    sessionId,
+    440,
+    280,
+    path.join(assetsDir, "promo-440x280.png")
+  );
+} finally {
+  cdp?.close();
+  browserProc?.kill();
+  server.close();
+  await fsp.rm(userDataDir, { recursive: true, force: true }).catch(() => {});
 }
-
-// 1. Generate Promo Tile: 440x280 px
-function generatePromoTile() {
-  const img = new ImageBuffer(440, 280);
-  const darkBg = [16, 23, 25];       // #101719
-  const accent = [216, 243, 106];    // #d8f36a
-  const muted = [168, 181, 174];     // #a8b5ae
-  const borderCol = [52, 65, 61];    // #34413d
-
-  for (let y = 0; y < 280; y++) {
-    for (let x = 0; x < 440; x++) {
-      const distFromCorner = Math.sqrt(Math.pow(440 - x, 2) + Math.pow(y, 2));
-      const glow = Math.max(0, 1 - distFromCorner / 350) * 0.12;
-      const r = Math.round(darkBg[0] * (1 - glow) + accent[0] * glow);
-      const g = Math.round(darkBg[1] * (1 - glow) + accent[1] * glow);
-      const b = Math.round(darkBg[2] * (1 - glow) + accent[2] * glow);
-      img.setPixel(x, y, r, g, b, 255);
-    }
-  }
-
-  img.drawBorder(0, 0, 440, 280, 0, 1, borderCol);
-
-  // Logo Badge "A"
-  const bx = 45;
-  const by = 48;
-  const bw = 54;
-  const bh = 54;
-  img.fillRoundedRect(bx, by, bw, bh, 12, [22, 34, 28]);
-  img.drawBorder(bx, by, bw, bh, 12, 1.5, accent);
-
-  const cx = bx + bw / 2;
-  const cy = by + bh / 2;
-  const h = 32;
-  const topY = cy - h / 2;
-  const bottomY = cy + h / 2;
-  const halfBase = h * 0.38;
-  const strokeWidth = 3;
-
-  for (let y = by; y < by + bh; y++) {
-    for (let x = bx; x < bx + bw; x++) {
-      if (y >= topY && y <= bottomY) {
-        const prog = (y - topY) / (bottomY - topY);
-        const lX = cx - prog * halfBase;
-        const rX = cx + prog * halfBase;
-        const isBar = (prog >= 0.52 && prog <= 0.68 && x >= lX && x <= rX);
-        const dL = Math.abs(x - lX);
-        const dR = Math.abs(x - rX);
-        if (Math.min(dL, dR) < strokeWidth || isBar) {
-          img.setPixel(x, y, accent[0], accent[1], accent[2], 255);
-        }
-      }
-    }
-  }
-
-  // Text bars
-  img.fillRoundedRect(114, 52, 180, 20, 3, [243, 245, 239]);
-  img.fillRoundedRect(114, 78, 120, 12, 2, accent);
-  img.fillRoundedRect(45, 125, 290, 14, 3, [218, 226, 222]);
-  img.fillRoundedRect(45, 146, 210, 11, 2, muted);
-
-  const pills = [
-    { x: 45, y: 195, w: 105 },
-    { x: 158, y: 195, w: 115 },
-    { x: 281, y: 195, w: 110 }
-  ];
-
-  for (const pill of pills) {
-    img.fillRoundedRect(pill.x, pill.y, pill.w, 32, 6, [25, 36, 32]);
-    img.drawBorder(pill.x, pill.y, pill.w, 32, 6, 1, [48, 68, 58]);
-    img.fillRoundedRect(pill.x + 12, pill.y + 11, pill.w - 24, 10, 2, accent);
-  }
-
-  img.fillRect(0, 276, 440, 4, accent);
-  return img.toPng();
-}
-
-// 2. Generate Store Screenshot 1 (Review Board with Best Move Arrow): 1280x800 px
-function generateReviewScreenshot() {
-  const img = new ImageBuffer(1280, 800);
-  const darkBg = [16, 23, 25];
-  const accent = [216, 243, 106];
-  const green = [34, 197, 94];
-  const line = [52, 65, 61];
-  const lightSq = [212, 217, 200];
-  const darkSq = [113, 136, 118];
-
-  img.fillRect(0, 0, 1280, 800, darkBg);
-
-  // Header Bar
-  img.fillRect(0, 0, 1280, 70, [18, 26, 28]);
-  img.fillRect(0, 69, 1280, 1, line);
-  img.fillRoundedRect(60, 18, 34, 34, 7, [22, 34, 28]);
-  img.drawBorder(60, 18, 34, 34, 7, 1.2, accent);
-  img.fillRoundedRect(105, 27, 130, 16, 3, [243, 245, 239]);
-  img.fillRoundedRect(1100, 25, 120, 22, 11, [24, 35, 31]);
-  img.drawBorder(1100, 25, 120, 22, 11, 1, line);
-  img.fillRoundedRect(1112, 33, 6, 6, 3, accent);
-  img.fillRoundedRect(1124, 31, 80, 10, 2, [168, 181, 174]);
-
-  // Match Header Banner
-  img.fillRoundedRect(60, 95, 1160, 72, 8, [22, 34, 29]);
-  img.drawBorder(60, 95, 1160, 72, 8, 1, [42, 58, 51]);
-
-  // White Player
-  img.fillRoundedRect(80, 109, 44, 44, 6, [243, 245, 239]);
-  img.fillRoundedRect(136, 115, 150, 16, 3, [243, 245, 239]);
-  img.fillRoundedRect(136, 136, 60, 11, 2, [168, 181, 174]);
-  img.fillRoundedRect(320, 107, 75, 48, 6, [32, 48, 36]);
-  img.drawBorder(320, 107, 75, 48, 6, 1, accent);
-  img.fillRoundedRect(332, 115, 50, 18, 3, accent);
-  img.fillRoundedRect(335, 137, 45, 8, 1, [168, 181, 174]);
-
-  // Result Badge
-  img.fillRoundedRect(570, 115, 140, 32, 16, [32, 48, 36]);
-  img.drawBorder(570, 115, 140, 32, 16, 1, accent);
-  img.fillRoundedRect(588, 125, 104, 12, 2, accent);
-
-  // Black Player
-  img.fillRoundedRect(885, 107, 75, 48, 6, [28, 45, 43]);
-  img.drawBorder(885, 107, 75, 48, 6, 1, [131, 220, 218]);
-  img.fillRoundedRect(897, 115, 50, 18, 3, [131, 220, 218]);
-  img.fillRoundedRect(900, 137, 45, 8, 1, [168, 181, 174]);
-  img.fillRoundedRect(990, 115, 150, 16, 3, [243, 245, 239]);
-  img.fillRoundedRect(1080, 136, 60, 11, 2, [168, 181, 174]);
-  img.fillRoundedRect(1156, 109, 44, 44, 6, [28, 38, 33]);
-
-  // Left Column: Chessboard
-  const boardX = 60;
-  const boardY = 195;
-  const boardSize = 512;
-  const sqSize = boardSize / 8;
-
-  img.drawBorder(boardX - 1, boardY - 1, boardSize + 2, boardSize + 2, 4, 1, [100, 117, 106]);
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const isDark = (r + c) % 2 === 1;
-      img.fillRect(boardX + c * sqSize, boardY + r * sqSize, sqSize, sqSize, isDark ? darkSq : lightSq);
-    }
-  }
-
-  // Highlight Last Move
-  img.fillRect(boardX + 4 * sqSize, boardY + 4 * sqSize, sqSize, sqSize, [216, 243, 106, 130]);
-  img.fillRect(boardX + 4 * sqSize, boardY + 6 * sqSize, sqSize, sqSize, [216, 243, 106, 90]);
-
-  // Best Move Arrow
-  const aX1 = boardX + 3.5 * sqSize;
-  const aY1 = boardY + 4.5 * sqSize;
-  const aX2 = boardX + 5.5 * sqSize;
-  const aY2 = boardY + 2.5 * sqSize;
-  img.drawLine(aX1, aY1, aX2, aY2, 7, green);
-  img.fillRoundedRect(aX2 - 10, aY2 - 10, 20, 20, 10, green);
-  img.fillRoundedRect(aX2 - 4, aY2 - 4, 8, 8, 4, [16, 23, 25]);
-
-  // Board navigation controls
-  img.fillRoundedRect(boardX, 720, 85, 34, 4, [37, 28, 24]);
-  img.drawBorder(boardX, 720, 85, 34, 4, 1, [90, 66, 55]);
-  img.fillRoundedRect(boardX + 95, 720, 42, 34, 4, [32, 43, 38]);
-  img.fillRoundedRect(boardX + 145, 728, 220, 18, 3, [210, 220, 212]);
-  img.fillRoundedRect(boardX + 375, 720, 42, 34, 4, [32, 43, 38]);
-  img.fillRoundedRect(boardX + 427, 720, 85, 34, 4, [37, 28, 24]);
-  img.drawBorder(boardX + 427, 720, 85, 34, 4, 1, [90, 66, 55]);
-
-  // Right Column
-  const rightX = 610;
-
-  // Advantage Panel
-  img.fillRoundedRect(rightX, 195, 610, 78, 6, [23, 32, 29]);
-  img.drawBorder(rightX, 195, 610, 78, 6, 1, [71, 85, 77]);
-  img.fillRoundedRect(rightX + 16, 207, 140, 14, 2, [231, 236, 229]);
-  img.fillRoundedRect(rightX + 510, 205, 80, 18, 3, accent);
-  img.fillRoundedRect(rightX + 16, 235, 578, 14, 3, [113, 136, 118]);
-  img.fillRoundedRect(rightX + 16, 235, 420, 14, 3, [245, 246, 239]);
-  img.fillRect(rightX + 16 + 289, 235, 2, 14, [16, 23, 25]);
-
-  // Best Continuation Card
-  img.fillRoundedRect(rightX, 288, 610, 140, 8, [18, 28, 23]);
-  img.drawBorder(rightX, 288, 610, 140, 8, 1, [34, 197, 94, 90]);
-  img.fillRoundedRect(rightX + 16, 302, 140, 18, 4, [34, 197, 94, 50]);
-  img.fillRoundedRect(rightX + 24, 306, 124, 10, 2, green);
-  img.fillRoundedRect(rightX + 170, 306, 90, 10, 2, [168, 181, 174]);
-
-  img.fillRoundedRect(rightX + 16, 335, 120, 34, 6, [34, 197, 94, 40]);
-  img.drawBorder(rightX + 16, 335, 120, 34, 6, 1.2, green);
-  img.fillRoundedRect(rightX + 30, 345, 90, 14, 2, [243, 245, 239]);
-
-  img.fillRoundedRect(rightX + 148, 335, 120, 34, 6, [24, 35, 30]);
-  img.drawBorder(rightX + 148, 335, 120, 34, 6, 1, line);
-  img.fillRoundedRect(rightX + 162, 345, 90, 14, 2, [168, 181, 174]);
-
-  img.fillRoundedRect(rightX + 280, 335, 120, 34, 6, [24, 35, 30]);
-  img.drawBorder(rightX + 280, 335, 120, 34, 6, 1, line);
-  img.fillRoundedRect(rightX + 294, 345, 90, 14, 2, [168, 181, 174]);
-
-  img.fillRoundedRect(rightX + 16, 384, 180, 32, 6, [34, 197, 94]);
-  img.fillRoundedRect(rightX + 210, 384, 180, 32, 6, [25, 36, 31]);
-  img.drawBorder(rightX + 210, 384, 180, 32, 6, 1, line);
-
-  // Move Classification Table
-  img.fillRoundedRect(rightX, 442, 610, 310, 8, [20, 28, 25]);
-  img.drawBorder(rightX, 442, 610, 310, 8, 1, [43, 55, 50]);
-  img.fillRect(rightX, 475, 610, 1, line);
-  img.fillRoundedRect(rightX + 20, 454, 140, 12, 2, accent);
-  img.fillRoundedRect(rightX + 250, 454, 110, 12, 2, [168, 181, 174]);
-  img.fillRoundedRect(rightX + 470, 454, 120, 12, 2, [131, 220, 218]);
-
-  const cats = [
-    { label: "Best", col: accent, y: 488 },
-    { label: "Great", col: [134, 239, 172], y: 524 },
-    { label: "Good", col: [155, 181, 165], y: 560 },
-    { label: "Inaccuracy", col: [246, 224, 118], y: 596 },
-    { label: "Mistake", col: [255, 191, 128], y: 632 },
-    { label: "Blunder", col: [255, 155, 138], y: 668 }
-  ];
-
-  for (const c of cats) {
-    img.fillRect(rightX + 15, c.y + 26, 580, 1, [28, 38, 33]);
-    img.fillRoundedRect(rightX + 35, c.y + 4, 30, 14, 2, [243, 245, 239]);
-    img.fillRoundedRect(rightX + 265, c.y + 2, 80, 18, 3, c.col);
-    img.fillRoundedRect(rightX + 540, c.y + 4, 30, 14, 2, [243, 245, 239]);
-  }
-
-  return img.toPng();
-}
-
-// 3. Generate Store Screenshot 2 (Side-by-side Move Breakdown & Coach Notes): 1280x800 px
-function generateBreakdownScreenshot() {
-  const img = new ImageBuffer(1280, 800);
-  const darkBg = [16, 23, 25];
-  const accent = [216, 243, 106];
-  const line = [52, 65, 61];
-
-  img.fillRect(0, 0, 1280, 800, darkBg);
-
-  // Header Bar
-  img.fillRect(0, 0, 1280, 70, [18, 26, 28]);
-  img.fillRect(0, 69, 1280, 1, line);
-  img.fillRoundedRect(60, 18, 34, 34, 7, [22, 34, 28]);
-  img.drawBorder(60, 18, 34, 34, 7, 1.2, accent);
-  img.fillRoundedRect(105, 27, 130, 16, 3, [243, 245, 239]);
-
-  // Section Title: Move Quality & Breakdown
-  img.fillRoundedRect(60, 100, 280, 24, 3, [243, 245, 239]);
-  img.fillRoundedRect(60, 132, 450, 14, 2, [168, 181, 174]);
-
-  // Full-width Side-by-Side Breakdown Card (y: 165, h: 290)
-  img.fillRoundedRect(60, 165, 1160, 290, 8, [20, 28, 25]);
-  img.drawBorder(60, 165, 1160, 290, 8, 1, [43, 55, 50]);
-
-  // Table header
-  img.fillRect(60, 215, 1160, 1, line);
-  img.fillRoundedRect(100, 185, 200, 16, 3, accent);
-  img.fillRoundedRect(530, 185, 180, 16, 3, [168, 181, 174]);
-  img.fillRoundedRect(960, 185, 200, 16, 3, [131, 220, 218]);
-
-  const cats = [
-    { label: "Best Moves", col: accent, y: 230 },
-    { label: "Great Moves", col: [134, 239, 172], y: 265 },
-    { label: "Good Moves", col: [155, 181, 165], y: 300 },
-    { label: "Inaccuracies", col: [246, 224, 118], y: 335 },
-    { label: "Mistakes", col: [255, 191, 128], y: 370 },
-    { label: "Blunders", col: [255, 155, 138], y: 405 }
-  ];
-
-  for (const c of cats) {
-    img.fillRect(80, c.y + 24, 1120, 1, [28, 38, 33]);
-    img.fillRoundedRect(140, c.y + 2, 60, 16, 2, [243, 245, 239]);
-    img.fillRoundedRect(550, c.y, 140, 20, 4, c.col);
-    img.fillRoundedRect(1020, c.y + 2, 60, 16, 2, [243, 245, 239]);
-  }
-
-  // Section 2: Coach's Notes Cards (y: 480)
-  img.fillRoundedRect(60, 480, 240, 22, 3, [243, 245, 239]);
-
-  const notes = [
-    { y: 520, badgeCol: [255, 155, 138], ply: "18... Qh4" },
-    { y: 605, badgeCol: [255, 191, 128], ply: "22... d5" },
-    { y: 690, badgeCol: accent, ply: "24. Re1" }
-  ];
-
-  for (const n of notes) {
-    img.fillRoundedRect(60, n.y, 1160, 72, 6, [22, 31, 27]);
-    img.drawBorder(60, n.y, 1160, 72, 6, 1, [43, 55, 50]);
-    // Move token
-    img.fillRoundedRect(80, n.y + 20, 80, 32, 4, [32, 43, 38]);
-    img.fillRoundedRect(95, n.y + 30, 50, 12, 2, [243, 245, 239]);
-    // Note title & text
-    img.fillRoundedRect(180, n.y + 18, 280, 14, 2, [243, 245, 239]);
-    img.fillRoundedRect(180, n.y + 38, 700, 12, 2, [168, 181, 174]);
-    // Badge
-    img.fillRoundedRect(1080, n.y + 22, 100, 26, 4, n.badgeCol);
-  }
-
-  return img.toPng();
-}
-
-// 4. Generate Store Screenshot 3 (Freeplay What-If Analysis Mode): 1280x800 px
-function generateFreeplayScreenshot() {
-  const img = new ImageBuffer(1280, 800);
-  const darkBg = [16, 23, 25];
-  const accent = [216, 243, 106];
-  const line = [52, 65, 61];
-  const lightSq = [212, 217, 200];
-  const darkSq = [113, 136, 118];
-
-  img.fillRect(0, 0, 1280, 800, darkBg);
-
-  // Header Bar
-  img.fillRect(0, 0, 1280, 70, [18, 26, 28]);
-  img.fillRect(0, 69, 1280, 1, line);
-  img.fillRoundedRect(60, 18, 34, 34, 7, [22, 34, 28]);
-  img.drawBorder(60, 18, 34, 34, 7, 1.2, accent);
-  img.fillRoundedRect(105, 27, 130, 16, 3, [243, 245, 239]);
-
-  // Freeplay Title Banner
-  img.fillRoundedRect(60, 95, 1160, 72, 8, [24, 36, 32]);
-  img.drawBorder(60, 95, 1160, 72, 8, 1, accent);
-  img.fillRoundedRect(90, 115, 260, 18, 3, accent); // "FREEPLAY / WHAT-IF ANALYSIS"
-  img.fillRoundedRect(90, 140, 480, 12, 2, [168, 181, 174]); // "Test alternate lines from any move"
-
-  // Board (x: 60, y: 195)
-  const boardX = 60;
-  const boardY = 195;
-  const boardSize = 512;
-  const sqSize = boardSize / 8;
-
-  img.drawBorder(boardX - 1, boardY - 1, boardSize + 2, boardSize + 2, 4, 1, [100, 117, 106]);
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const isDark = (r + c) % 2 === 1;
-      img.fillRect(boardX + c * sqSize, boardY + r * sqSize, sqSize, sqSize, isDark ? darkSq : lightSq);
-    }
-  }
-
-  // Selected piece circle & legal square dots
-  img.drawBorder(boardX + 3 * sqSize + 4, boardY + 4 * sqSize + 4, sqSize - 8, sqSize - 8, (sqSize - 8) / 2, 3, accent);
-  // Legal moves
-  const legalCoords = [[2, 2], [2, 4], [4, 2], [5, 3], [5, 5]];
-  for (const [r, c] of legalCoords) {
-    const cx = boardX + c * sqSize + sqSize / 2;
-    const cy = boardY + r * sqSize + sqSize / 2;
-    img.fillRoundedRect(cx - 7, cy - 7, 14, 14, 7, [216, 243, 106, 200]);
-  }
-
-  // Right Column: Freeplay Panel (x: 610, y: 195)
-  const rightX = 610;
-  img.fillRoundedRect(rightX, 195, 610, 512, 8, [22, 31, 27]);
-  img.drawBorder(rightX, 195, 610, 512, 8, 1, [43, 55, 50]);
-
-  // Card Header
-  img.fillRoundedRect(rightX + 24, 220, 180, 18, 3, [243, 245, 239]);
-  img.fillRoundedRect(rightX + 480, 218, 100, 22, 4, accent); // "+1.4 · White holds edge"
-
-  // Live Engine Status Box
-  img.fillRoundedRect(rightX + 24, 260, 560, 90, 6, [18, 25, 22]);
-  img.drawBorder(rightX + 24, 260, 560, 90, 6, 1, line);
-  img.fillRoundedRect(rightX + 40, 278, 220, 14, 2, accent);
-  img.fillRoundedRect(rightX + 40, 302, 480, 12, 2, [168, 181, 174]);
-  img.fillRoundedRect(rightX + 40, 322, 380, 12, 2, [168, 181, 174]);
-
-  // Alternate Line History
-  img.fillRoundedRect(rightX + 24, 375, 200, 16, 2, [243, 245, 239]);
-  for (let i = 0; i < 4; i++) {
-    const ny = 405 + i * 48;
-    img.fillRoundedRect(rightX + 24, ny, 560, 38, 4, [26, 36, 31]);
-    img.fillRoundedRect(rightX + 40, ny + 12, 80, 14, 2, accent);
-    img.fillRoundedRect(rightX + 140, ny + 12, 300, 14, 2, [168, 181, 174]);
-    img.fillRoundedRect(rightX + 500, ny + 10, 65, 18, 3, [34, 197, 94]);
-  }
-
-  // Buttons
-  img.fillRoundedRect(rightX + 24, 635, 170, 38, 6, [32, 43, 38]);
-  img.fillRoundedRect(rightX + 210, 635, 170, 38, 6, [45, 30, 25]);
-
-  return img.toPng();
-}
-
-// Write files to store-assets
-const promoPng = generatePromoTile();
-fs.writeFileSync(path.join(assetsDir, "promo-440x280.png"), promoPng);
-console.log(`Generated store-assets/promo-440x280.png (${promoPng.length} bytes)`);
-
-const reviewPng = generateReviewScreenshot();
-fs.writeFileSync(path.join(assetsDir, "screenshot1-review.png"), reviewPng);
-console.log(`Generated store-assets/screenshot1-review.png (${reviewPng.length} bytes)`);
-
-const breakdownPng = generateBreakdownScreenshot();
-fs.writeFileSync(path.join(assetsDir, "screenshot2-breakdown.png"), breakdownPng);
-console.log(`Generated store-assets/screenshot2-breakdown.png (${breakdownPng.length} bytes)`);
-
-const freeplayPng = generateFreeplayScreenshot();
-fs.writeFileSync(path.join(assetsDir, "screenshot3-freeplay.png"), freeplayPng);
-console.log(`Generated store-assets/screenshot3-freeplay.png (${freeplayPng.length} bytes)`);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aftermove — Chess Review",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A silent Chess.com game recorder with private, post-game Stockfish reviews.",
   "icons": {
     "16": "icons/icon16.png",

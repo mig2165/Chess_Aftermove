@@ -88,6 +88,30 @@
         </section>
         <div class="replay-layout">
           <div class="board-column">
+            <!-- Board & Piece Appearance Customizer -->
+            <div class="board-theme-bar">
+              <div class="theme-picker-group">
+                <label for="board-piece-select">Pieces:</label>
+                <select id="board-piece-select" class="theme-select" title="Choose piece design">
+                  <option value="modern" selected>Modern Vector (Staunton)</option>
+                  <option value="minimal">Minimalist Geometric</option>
+                  <option value="woodcraft">Classic Woodcraft</option>
+                  <option value="neon">Cyber Neon</option>
+                  <option value="classic">Unicode Glyphs (Classic)</option>
+                </select>
+              </div>
+              <div class="theme-picker-group">
+                <label for="board-color-select">Board:</label>
+                <select id="board-color-select" class="theme-select" title="Choose board colors">
+                  <option value="sage" selected>Sage Forest</option>
+                  <option value="wood">Walnut &amp; Maple</option>
+                  <option value="ocean">Ocean Blue</option>
+                  <option value="slate">Monochrome Slate</option>
+                  <option value="midnight">Midnight Dark</option>
+                </select>
+              </div>
+            </div>
+
             <div id="chessboard" class="chessboard" role="grid" aria-label="Chess position after the selected move"></div>
             <div class="board-controls">
               <button id="prev-mistake" class="mistake-jump-button" type="button" title="Previous mistake (Shift+Left)" aria-label="Previous mistake" disabled>◀ Mistake</button>
@@ -138,6 +162,25 @@
             <div id="move-list" class="move-list" aria-label="Game moves"></div>
           </div>
         </div>
+      </section>
+
+      <section id="reflection-section" class="reflection-section" hidden>
+        <div class="section-heading">
+          <h2>Game Reflection &amp; Patterns</h2>
+          <div class="reflection-tabs">
+            <span class="reflection-perspective-label">Perspective:</span>
+            <button id="perspective-white" class="reflection-tab is-active" type="button">White's Game</button>
+            <button id="perspective-black" class="reflection-tab" type="button">Black's Game</button>
+          </div>
+        </div>
+        <div id="reflection-habits-banner" class="habits-banner" hidden>
+          <span class="habits-icon">⚠️</span>
+          <div class="habits-text">
+            <strong>Recurring Trend Detected:</strong>
+            <span id="habits-summary"></span>
+          </div>
+        </div>
+        <div id="reflection-cards" class="reflection-cards"></div>
       </section>
 
       <section class="findings-section">

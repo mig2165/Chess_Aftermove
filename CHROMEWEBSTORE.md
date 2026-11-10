@@ -11,10 +11,12 @@ This document contains all the copy, justifications, and asset references needed
 | **Production ZIP** | [`aftermove.zip`](file:///c:/Users/migue/Chess_ai/aftermove.zip) | Drag-and-drop upload in the Chrome Developer Dashboard. |
 | **Privacy Policy** | [`PRIVACY.md`](file:///c:/Users/migue/Chess_ai/PRIVACY.md) | Policy text to host on GitHub / Notion to get your public URL. |
 | **Store Icon** | [`icons/icon128.png`](file:///c:/Users/migue/Chess_ai/icons/icon128.png) | 128×128 px store icon. |
-| **Screenshot 1** | [`store-assets/screenshot1-review.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot1-review.png) | 1280×800 px — Main board, best move arrow, & 3-move continuation. |
-| **Screenshot 2** | [`store-assets/screenshot2-breakdown.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot2-breakdown.png) | 1280×800 px — White vs. Black breakdown table & Coach notes. |
-| **Screenshot 3** | [`store-assets/screenshot3-freeplay.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot3-freeplay.png) | 1280×800 px — Interactive Freeplay / What-If analysis mode. |
-| **Promo Tile** | [`store-assets/promo-440x280.png`](file:///c:/Users/migue/Chess_ai/store-assets/promo-440x280.png) | 440×280 px — Small promotional card for store search. |
+| **Screenshot 1** | [`store-assets/screenshot1-review.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot1-review.png) | 1280×800 px — Full chessboard replay, blunder `‼` badge, best-move green arrow, advantage bar, & annotated move list. |
+| **Screenshot 2** | [`store-assets/screenshot2-breakdown.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot2-breakdown.png) | 1280×800 px — Post-game match banner, player CAPS accuracies, & White vs. Black move quality breakdown table. |
+| **Screenshot 3** | [`store-assets/screenshot3-freeplay.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot3-freeplay.png) | 1280×800 px — Interactive Freeplay ("What-If") mode with legal move highlights & live Stockfish evaluation. |
+| **Screenshot 4** | [`store-assets/screenshot4-continuation-coach.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot4-continuation-coach.png) | 1280×800 px — Move explanation card, 3-move Best Continuation sequence preview, & Coach’s notes. |
+| **Screenshot 5** | [`store-assets/screenshot5-reflection.png`](file:///c:/Users/migue/Chess_ai/store-assets/screenshot5-reflection.png) | 1280×800 px — Tactical Reflection, Elo pattern clusters & multi-game habit tracking. |
+| **Promo Tile** | [`store-assets/promo-440x280.png`](file:///c:/Users/migue/Chess_ai/store-assets/promo-440x280.png) | 440×280 px — Small promotional card for Chrome Web Store search. |
 
 ---
 

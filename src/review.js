@@ -2,6 +2,8 @@ import { Chess } from "chess.js";
 import { evaluationAtPly, formatEvaluation, formatEvaluationSwing, whiteAdvantageShare } from "./advantage.js";
 import { boardPoint, displaySquare } from "./board-view.js";
 import { adjacentMistakePly, adjacentPly, classifyPlayedMove, dispatchParallelTasks, isBadMove, moveMark, playerAccuracy, scoreFromInfo, whiteScore } from "./engine-logic.js";
+import { detectGamePatterns, getHistoricalHabits, recordGamePatterns } from "./reflection.js";
+import { PIECE_THEMES, BOARD_THEMES } from "./piece-svgs.js";
 
 const $ = (selector) => document.querySelector(selector);
 const analyzeButton = $("#analyze-button");
@@ -21,6 +23,8 @@ let activeEngine;
 let aiRequestController;
 let moveSoundsEnabled = true;
 let soundContext;
+let currentPieceTheme = "modern";
+let currentBoardTheme = "sage";
 let bestMoveVisible = false;
 let bestMoveDismissed = false;
 let bestSequenceStep = 0;
@@ -258,28 +262,75 @@ function uciLineToSan(fen, moves, limit = 5) {
 function humanNote(entry) {
   const move = entry.actualSan;
   const best = entry.bestSan;
-  if (entry.checkmate) return `${move} — checkmate. No notes. Just enjoy that one.`;
-  if (entry.category === "blunder") return `${move} gave away a lot of ground. ${best ? `Stockfish preferred ${best}.` : "There was a safer continuation."} The board has a flair for drama.`;
-  if (entry.category === "mistake") return `${move} made the position harder than it needed to be. ${best ? `${best} kept more of the edge.` : "Stockfish found a steadier option."}`;
-  if (entry.category === "inaccuracy") return `${move} was playable, but it let some advantage slip. ${best ? `The engine's cleaner idea was ${best}.` : "A small tune-up was available."}`;
-  if (entry.category === "excellent") return `${move} gained ground in the engine's evaluation. Quietly excellent; the engine approves.`;
-  if (entry.category === "best") return `${move} matches Stockfish's top choice at this search depth.`;
-  return `${move} held up well under engine review. No drama detected.`;
+  if (entry.checkmate) return `${move} ends the game by checkmate.`;
+
+  const pawnLoss = typeof entry.loss === "number" && entry.loss > 0 ? (entry.loss / 100).toFixed(1) : null;
+  const consequence = entry.consequenceLine && entry.consequenceLine.length > 0 ? entry.consequenceLine[0] : null;
+
+  if (entry.category === "blunder") {
+    let note = `${move} is a blunder`;
+    if (pawnLoss) note += ` losing about ${pawnLoss} pawns of advantage.`;
+    else note += ".";
+    if (consequence) {
+      note += ` It allows ${consequence}${entry.consequenceLine.length > 1 ? ` (line: ${entry.consequenceLine.slice(0, 3).join(" ")})` : ""}.`;
+    }
+    if (best) note += ` Best was ${best}.`;
+    return note;
+  }
+
+  if (entry.category === "mistake") {
+    let note = `${move} is a mistake`;
+    if (pawnLoss) note += ` conceding ${pawnLoss} pawns.`;
+    else note += ".";
+    if (best) note += ` Stockfish preferred ${best} to keep the advantage.`;
+    if (consequence) note += ` Opponent can respond with ${consequence}.`;
+    return note;
+  }
+
+  if (entry.category === "inaccuracy") {
+    let note = `${move} is an inaccuracy`;
+    if (pawnLoss) note += ` (-${pawnLoss} pawns).`;
+    else note += ".";
+    if (best) note += ` A sharper move was ${best}.`;
+    return note;
+  }
+
+  if (entry.category === "excellent" || entry.category === "great") {
+    return `${move} was a great move that maintained strong pressure and protected your position.`;
+  }
+
+  if (entry.category === "brilliant") {
+    return `${move} was brilliant, finding the best tactical resource in the position!`;
+  }
+
+  if (entry.category === "best") {
+    return `${move} is the best move in this position, finding Stockfish’s top engine choice.`;
+  }
+
+  return `${move} is a solid, playable move.`;
 }
 
 function bestMoveReason(entry) {
-  if (entry.checkmate) return `${entry.actualSan} ends the game immediately. This review does not need an alternative move.`;
-  if (!entry.bestSan) return "Stockfish did not return a legal alternative for this position.";
+  if (entry.checkmate) return `${entry.actualSan} delivers checkmate.`;
+  if (!entry.bestSan) return "Stockfish did not return an alternative for this position.";
   const actual = entry.actualSan.replace(/[+#]$/, "");
   const best = entry.bestSan.replace(/[+#]$/, "");
-  if (actual === best) return `${entry.bestSan} was also Stockfish’s top choice at depth 10.`;
+  if (actual === best) return `${entry.bestSan} is Stockfish’s top choice in this position.`;
+  
+  const pawnLoss = typeof entry.loss === "number" && entry.loss > 0 ? (entry.loss / 100).toFixed(1) : null;
+  const consequence = entry.consequenceLine && entry.consequenceLine.length > 0 ? entry.consequenceLine.slice(0, 3).join(" ") : null;
+
   if (entry.loss >= 75) {
-    return `Stockfish preferred ${entry.bestSan}. Its depth-10 evaluation suggests this alternative would have avoided about ${(entry.loss / 100).toFixed(1)} pawns of lost advantage.`;
+    let reason = `Stockfish preferred ${entry.bestSan}`;
+    if (pawnLoss) reason += ` (avoiding ${pawnLoss} pawns of lost value).`;
+    else reason += ".";
+    if (consequence) reason += ` After ${entry.actualSan}, the tactical reply was ${consequence}.`;
+    return reason;
   }
   if (entry.loss <= -75) {
-    return `The played move ${entry.actualSan} scored better than Stockfish’s initial ${entry.bestSan} choice at this search depth. Engine preferences can change at deeper searches.`;
+    return `The played move ${entry.actualSan} scored higher than Stockfish’s initial choice at this depth.`;
   }
-  return `Stockfish’s top choice was ${entry.bestSan}. The evaluation difference was small at depth 10, so this is an alternative, not a clear correction.`;
+  return `Stockfish preferred ${entry.bestSan}, though ${entry.actualSan} was closely evaluated.`;
 }
 
 function tacticalExplanation(entry) {
@@ -446,12 +497,29 @@ function renderBoard() {
 
       cell.setAttribute("role", "gridcell");
       cell.setAttribute("aria-label", `${square}${piece ? `, ${piece.color === "w" ? "white" : "black"} ${pieceName[piece.type]}` : ""}${playedMove?.to === square ? ", move destination" : ""}`);
-      cell.textContent = piece ? pieceGlyph[piece.color + piece.type] : "";
+      const activeTheme = PIECE_THEMES[currentPieceTheme] || PIECE_THEMES.modern;
+      if (piece) {
+        if (activeTheme.isGlyph) {
+          cell.classList.add("theme-classic");
+          cell.textContent = pieceGlyph[piece.color + piece.type] || "";
+        } else {
+          const svgStr = activeTheme[piece.color + piece.type];
+          if (svgStr) cell.innerHTML = svgStr;
+          else cell.textContent = pieceGlyph[piece.color + piece.type] || "";
+        }
+      }
 
       if (originGhost && originGhost.square === square) {
         const ghost = document.createElement("span");
         ghost.className = "square-ghost-origin";
-        ghost.textContent = pieceGlyph[originGhost.piece.color + originGhost.piece.type];
+        if (activeTheme.isGlyph) {
+          ghost.classList.add("theme-classic");
+          ghost.textContent = pieceGlyph[originGhost.piece.color + originGhost.piece.type];
+        } else {
+          const gSvg = activeTheme[originGhost.piece.color + originGhost.piece.type];
+          if (gSvg) ghost.innerHTML = gSvg;
+          else ghost.textContent = pieceGlyph[originGhost.piece.color + originGhost.piece.type];
+        }
         ghost.setAttribute("aria-hidden", "true");
         cell.append(ghost);
       }
@@ -986,6 +1054,107 @@ function renderMoveList(analysis) {
   jumpToPly(selectedPly);
 }
 
+let selectedReflectionSide = "w";
+
+async function renderReflection(analysis, forcedSide = null) {
+  const section = $("#reflection-section");
+  if (!section) return;
+  const cardsContainer = $("#reflection-cards");
+  const habitsBanner = $("#reflection-habits-banner");
+  const habitsSummary = $("#habits-summary");
+
+  if (forcedSide) {
+    selectedReflectionSide = forcedSide;
+  } else if (!selectedReflectionSide) {
+    selectedReflectionSide = boardFlipped ? "b" : "w";
+  }
+
+  // Update tabs
+  const tabWhite = $("#perspective-white");
+  const tabBlack = $("#perspective-black");
+  if (tabWhite && tabBlack) {
+    tabWhite.classList.toggle("is-active", selectedReflectionSide === "w");
+    tabBlack.classList.toggle("is-active", selectedReflectionSide === "b");
+  }
+
+  const headers = extractPgnHeaders(pgn);
+  const patterns = detectGamePatterns(analysis, gameHistory, { focusSide: selectedReflectionSide, pgnHeaders: headers });
+  await recordGamePatterns(patterns);
+  const habits = await getHistoricalHabits();
+
+  if (habits && habits.length > 0) {
+    const topHabit = habits[0];
+    habitsSummary.textContent = `"${topHabit.title}" has appeared across ${topHabit.count} of your reviewed games. Focus on this in your next match!`;
+    habitsBanner.hidden = false;
+  } else {
+    habitsBanner.hidden = true;
+  }
+
+  if (!patterns.length) {
+    const sideName = selectedReflectionSide === "w" ? "White" : "Black";
+    cardsContainer.innerHTML = `<p class="empty-state">No major systemic patterns detected for ${sideName} in this game. Solid play!</p>`;
+    section.hidden = false;
+    return;
+  }
+
+  const cards = patterns.map((p) => {
+    const card = document.createElement("article");
+    card.className = "reflection-card";
+
+    const header = document.createElement("div");
+    header.className = "reflection-header";
+
+    const title = document.createElement("div");
+    title.className = "reflection-title";
+    title.innerHTML = `<span class="reflection-icon">${p.icon}</span> <span>${p.title}</span>`;
+
+    const badge = document.createElement("span");
+    badge.className = `reflection-badge ${p.severity}`;
+    badge.textContent = p.severity === "high" ? "Critical Pattern" : "Key Takeaway";
+
+    header.append(title, badge);
+
+    const summary = document.createElement("p");
+    summary.className = "reflection-summary";
+    summary.textContent = p.summary;
+
+    const movesRow = document.createElement("div");
+    movesRow.className = "reflection-moves";
+    const movesLabel = document.createElement("span");
+    movesLabel.style.fontSize = "11px";
+    movesLabel.style.color = "var(--muted)";
+    movesLabel.textContent = "Seen on moves:";
+    movesRow.append(movesLabel);
+
+    p.plies.forEach((ply) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "reflection-move-tag";
+      const moveNum = Math.ceil(ply / 2);
+      const isBlack = ply % 2 === 0;
+      const historyMove = gameHistory[ply - 1];
+      btn.textContent = `${moveNum}${isBlack ? "..." : "."} ${historyMove ? historyMove.san : ""}`;
+      btn.title = `Jump to move ${ply}`;
+      btn.addEventListener("click", () => {
+        jumpToPly(ply);
+        const board = $("#chessboard");
+        if (board) board.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      movesRow.append(btn);
+    });
+
+    const advice = document.createElement("div");
+    advice.className = "reflection-advice";
+    advice.innerHTML = `<strong>Coach's Advice:</strong> ${p.advice}`;
+
+    card.append(header, summary, movesRow, advice);
+    return card;
+  });
+
+  cardsContainer.replaceChildren(...cards);
+  section.hidden = false;
+}
+
 function renderFindings(analysis) {
   const notable = analysis.filter((entry) => ["blunder", "mistake", "inaccuracy", "excellent", "best"].includes(entry.category)).sort((a, b) => b.loss - a.loss);
   const chosen = notable.slice(0, 16).sort((a, b) => a.ply - b.ply);
@@ -997,6 +1166,27 @@ function renderFindings(analysis) {
   findingsElement.replaceChildren(...chosen.map((entry) => {
     const row = document.createElement("article");
     row.className = "finding";
+    row.style.cursor = "pointer";
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", `Jump to ${moveNumber(entry)}`);
+    
+    const jumpToThisMove = () => {
+      jumpToPly(entry.ply);
+      const board = $("#chessboard");
+      if (board) {
+        board.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    };
+
+    row.addEventListener("click", jumpToThisMove);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        jumpToThisMove();
+      }
+    });
+
     const move = document.createElement("div");
     move.className = "move-label";
     move.textContent = moveNumber(entry);
@@ -1327,12 +1517,14 @@ async function analyzeGame() {
         break;
       }
       const after = evaluations[index + 1];
+      const legalMovesCount = replayGame.moves().length;
       const { loss, category } = classifyPlayedMove({
         beforeScore: before.score,
         afterScore: after.score,
         turn,
         actualSan: actual.san,
-        bestSan
+        bestSan,
+        legalMovesCount
       });
       result.push({
         ply: index + 1,
@@ -1361,6 +1553,7 @@ async function analyzeGame() {
     }
     renderMoveList(result);
     renderFindings(result);
+    await renderReflection(result);
     ready = true;
     renderMoveSummary(result);
     renderAdvantage();
@@ -1515,8 +1708,19 @@ function renderMatchBanner(headers = {}) {
   banner.hidden = false;
 }
 
+function applyBoardTheme(themeKey) {
+  currentBoardTheme = themeKey;
+  const theme = BOARD_THEMES[themeKey] || BOARD_THEMES.sage;
+  const root = document.documentElement;
+  root.style.setProperty("--board-light", theme.light);
+  root.style.setProperty("--board-dark", theme.dark);
+}
+
 async function initialize() {
-  const state = await chrome.storage.local.get(["reviewPgn", "recording", "moveSounds", "aiEnabled", "aiKey", "aiModel", "analysisDepth"]);
+  const state = await chrome.storage.local.get([
+    "reviewPgn", "recording", "moveSounds", "aiEnabled", "aiKey", "aiModel", "analysisDepth",
+    "boardPieceTheme", "boardColorTheme"
+  ]);
   pgn = state.reviewPgn || "";
   gameLocked = Boolean(state.recording);
   moveSoundsEnabled = state.moveSounds !== false;
@@ -1528,6 +1732,15 @@ async function initialize() {
     const depthSelect = $("#engine-depth-select");
     if (depthSelect) depthSelect.value = String(state.analysisDepth);
   }
+
+  // Load custom piece and board appearance
+  currentPieceTheme = state.boardPieceTheme || "modern";
+  currentBoardTheme = state.boardColorTheme || "sage";
+  const pieceSelect = $("#board-piece-select");
+  const colorSelect = $("#board-color-select");
+  if (pieceSelect) pieceSelect.value = currentPieceTheme;
+  if (colorSelect) colorSelect.value = currentBoardTheme;
+  applyBoardTheme(currentBoardTheme);
   await updateCoachSettingsStatus();
   $("#move-sounds").disabled = gameLocked;
   $("#flip-board").disabled = gameLocked;
@@ -1574,6 +1787,18 @@ $("#engine-depth-select")?.addEventListener("change", async (event) => {
   const depth = Number(event.currentTarget.value) || 12;
   await chrome.storage.local.set({ analysisDepth: depth }).catch(() => {});
 });
+
+$("#board-piece-select")?.addEventListener("change", async (event) => {
+  currentPieceTheme = event.currentTarget.value;
+  await chrome.storage.local.set({ boardPieceTheme: currentPieceTheme }).catch(() => {});
+  renderBoard();
+});
+
+$("#board-color-select")?.addEventListener("change", async (event) => {
+  currentBoardTheme = event.currentTarget.value;
+  applyBoardTheme(currentBoardTheme);
+  await chrome.storage.local.set({ boardColorTheme: currentBoardTheme }).catch(() => {});
+});
 $("#previous-move").addEventListener("click", () => jumpToPly(adjacentPly(selectedPly, "ArrowLeft", gameHistory.length)));
 $("#next-move").addEventListener("click", () => jumpToPly(adjacentPly(selectedPly, "ArrowRight", gameHistory.length)));
 $("#prev-mistake")?.addEventListener("click", () => {
@@ -1588,6 +1813,22 @@ $("#flip-board").addEventListener("click", () => {
   boardFlipped = !boardFlipped;
   $("#flip-board").setAttribute("aria-pressed", String(boardFlipped));
   renderBoard();
+  // Automatically switch reflection tab to match perspective if analyzing
+  if (ready && entries.length) {
+    renderReflection(entries, boardFlipped ? "b" : "w");
+  }
+});
+
+$("#perspective-white")?.addEventListener("click", () => {
+  if (ready && entries.length) {
+    renderReflection(entries, "w");
+  }
+});
+
+$("#perspective-black")?.addEventListener("click", () => {
+  if (ready && entries.length) {
+    renderReflection(entries, "b");
+  }
 });
 $("#what-if-undo").addEventListener("click", () => {
   if (!whatIfGame || whatIfRunning || !whatIfGame.history().length) return;
